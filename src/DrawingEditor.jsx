@@ -71,6 +71,12 @@ async function loadPacks() {
 // One open drawing (a tab): layers of pixels, brushes with pen pressure, shapes, fill and selections.
 export default function DrawingEditor({ tabId, active, initial, binds, onMeta, onNew, onOpen, registerHandle }) {
   const [doc, setDocState] = useState(() => {
+    // "Edit a picture": the canvas is the size of the picture (at most 8192 px on the long side), see-through where it is
+    const pic = initial && initial.picture
+    if (pic) {
+      const k = Math.min(1, 8192 / Math.max(pic.w || 1, pic.h || 1))
+      return Doc.blank(Math.max(16, Math.round((pic.w || 1920) * k)), Math.max(16, Math.round((pic.h || 1080) * k)), 'transparent')
+    }
     const c = (initial && initial.canvas) || { w: 1920, h: 1080, bg: '#ffffff' }
     return Doc.blank(c.w, c.h, c.bg)
   })
@@ -84,7 +90,8 @@ export default function DrawingEditor({ tabId, active, initial, binds, onMeta, o
   const [projectPath, setProjectPath] = useState(null)
   const projectRef = useRef(null)
   projectRef.current = projectPath
-  const projectName = projectPath ? projectPath.split(/[\\/]/).pop().replace(/\.json$/i, '') : 'Untitled'
+  const pictureName = initial && initial.picture && initial.picture.name ? initial.picture.name.replace(/\.[^.]+$/, '') : ''
+  const projectName = projectPath ? projectPath.split(/[\\/]/).pop().replace(/\.json$/i, '') : pictureName || 'Untitled'
   const savedRev = useRef(doc.rev)
   const autoRev = useRef(-1)
   const thumbRef = useRef(null)
@@ -1115,6 +1122,22 @@ export default function DrawingEditor({ tabId, active, initial, binds, onMeta, o
   }
   useEffect(() => {
     if (initial && initial.json) loadFromJson(initial.json, initial.file)
+    // a picture from the PC to edit: it goes onto the first layer, exactly at the canvas size
+    if (initial && initial.picture) {
+      const img = new Image()
+      img.onload = () => {
+        const d = docRef.current
+        const l = d.layers[0]
+        const g = l.canvas.getContext('2d')
+        g.imageSmoothingQuality = 'high'
+        g.drawImage(img, 0, 0, d.w, d.h)
+        d.setLayer(l.id, { name: initial.picture.name ? initial.picture.name.replace(/\.[^.]+$/, '') : 'Picture' })
+        d.changed(true)
+        flash('Picture opened. Paint on it with a new layer (+ Layer) so the original stays safe, or directly on it.')
+      }
+      img.onerror = () => window.alert('That picture could not be opened.')
+      img.src = toUrl(initial.picture.path)
+    }
   }, [])
   useEffect(() => {
     registerHandle(tabId, { save: () => saveProject(false), isDirty: () => dirtyRef.current, getState: () => ({ drawing: true, doc: docRef.current }), dispatch: () => {} })

@@ -46,10 +46,12 @@ uniform vec4 c2A; uniform vec4 c2B;
 uniform vec4 kA; uniform vec4 kB;
 uniform vec3 kcA; uniform vec3 kcB;
 uniform vec2 szA; uniform vec2 szB;
+// the picture already blurred (a real Gaussian blur, made in passes of its own before the layer is drawn; see blurPass)
+uniform sampler2D blA; uniform sampler2D blB;
 struct Fx { vec4 f; vec4 c1; vec4 c2; vec4 k; vec3 kc; vec2 sz; };
 vec2 cbcr(vec3 c) { return vec2(-0.169 * c.r - 0.331 * c.g + 0.5 * c.b, 0.5 * c.r - 0.419 * c.g - 0.081 * c.b); }
 // sample the picture at q and apply the effects: chroma key, blur / sharpen, glow, colour correction, vignette
-vec4 shade(sampler2D t, vec2 q, Fx x) {
+vec4 shade(sampler2D t, sampler2D bl, vec2 q, Fx x) {
   vec2 px = 1.0 / x.sz;
   vec4 col = texture2D(t, q);
   if (x.k.w > 0.5) {
@@ -58,18 +60,20 @@ vec4 shade(sampler2D t, vec2 q, Fx x) {
     col.a *= a;
     col.rgb = mix(col.rgb, vec3(dot(col.rgb, vec3(0.299, 0.587, 0.114))), x.k.z * (1.0 - a));
   }
-  float blurR = x.f.x * 24.0;
   float sharp = x.f.y * 2.0;
-  if (blurR > 0.01 || sharp > 0.001) {
-    float rad = blurR > 0.01 ? blurR : 1.5;
+  if (x.f.x > 0.004) {
+    // blur: the Gaussian-blurred copy of the picture (strength in the pre-pass)
+    col.rgb = texture2D(bl, q).rgb;
+  } else if (sharp > 0.001) {
+    // sharpen: the picture plus its difference to a slightly blurred one
     vec3 acc = col.rgb;
     for (int i = 0; i < 8; i++) {
       float ang = 0.785398 * float(i);
       vec2 d = vec2(cos(ang), sin(ang)) * px;
-      acc += texture2D(t, clamp(q + d * rad * 0.5, 0.0, 1.0)).rgb + texture2D(t, clamp(q + d * rad, 0.0, 1.0)).rgb;
+      acc += texture2D(t, clamp(q + d * 0.75, 0.0, 1.0)).rgb + texture2D(t, clamp(q + d * 1.5, 0.0, 1.0)).rgb;
     }
     vec3 blurred = acc / 17.0;
-    col.rgb = blurR > 0.01 ? blurred : col.rgb + (col.rgb - blurred) * sharp;
+    col.rgb = col.rgb + (col.rgb - blurred) * sharp;
   }
   if (x.f.w > 0.001) {
     float gr = x.f.w * 36.0;
@@ -144,7 +148,7 @@ float maskAlpha(vec2 q, Mk m, sampler2D mp) {
   return m.k.z > 0.5 ? 1.0 - al : al;
 }
 // Result is premultiplied: transparent outside the picture, so layers can be stacked.
-vec4 sampleSrc(sampler2D t, vec2 s, vec4 tf, vec2 p, vec2 st, Fx fx, Mk mk, sampler2D mp, mat3 h, float w, vec2 uv) {
+vec4 sampleSrc(sampler2D t, sampler2D bl, vec2 s, vec4 tf, vec2 p, vec2 st, Fx fx, Mk mk, sampler2D mp, mat3 h, float w, vec2 uv) {
   vec2 c = uv - 0.5;
   if (p.y > 0.5) {
     // inverse of: scale, rotate (clockwise), then move
@@ -161,7 +165,7 @@ vec4 sampleSrc(sampler2D t, vec2 s, vec4 tf, vec2 p, vec2 st, Fx fx, Mk mk, samp
     if (hv.z < 0.0001) return vec4(0.0);
     q = hv.xy / hv.z;
     if (q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0) return vec4(0.0);
-    vec4 tx = shade(t, q, fx);
+    vec4 tx = shade(t, bl, q, fx);
     tx.a *= maskAlpha(q, mk, mp);
     return vec4(tx.rgb * tx.a * p.x, tx.a * p.x);
   }
@@ -171,12 +175,12 @@ vec4 sampleSrc(sampler2D t, vec2 s, vec4 tf, vec2 p, vec2 st, Fx fx, Mk mk, samp
     if (s.x > 1.0001 && (q.x < 0.0 || q.x > 1.0)) return vec4(0.0);
     if (s.y > 1.0001 && (q.y < 0.0 || q.y > 1.0)) return vec4(0.0);
   }
-  vec4 tx = shade(t, clamp(q, 0.0, 1.0), fx);
+  vec4 tx = shade(t, bl, clamp(q, 0.0, 1.0), fx);
   tx.a *= maskAlpha(q, mk, mp);
   return vec4(tx.rgb * tx.a * p.x, tx.a * p.x);
 }
-vec4 getFromColor(vec2 uv) { return sampleSrc(from, sA, tfA, pA, stA, Fx(fA, c1A, c2A, kA, kcA, szA), Mk(mkA, mbA, mrA, mnA, mbbA), mpA, hA, wA, uv); }
-vec4 getToColor(vec2 uv) { return sampleSrc(to, sB, tfB, pB, stB, Fx(fB, c1B, c2B, kB, kcB, szB), Mk(mkB, mbB, mrB, mnB, mbbB), mpB, hB, wB, uv); }
+vec4 getFromColor(vec2 uv) { return sampleSrc(from, blA, sA, tfA, pA, stA, Fx(fA, c1A, c2A, kA, kcA, szA), Mk(mkA, mbA, mrA, mnA, mbbA), mpA, hA, wA, uv); }
+vec4 getToColor(vec2 uv) { return sampleSrc(to, blB, sB, tfB, pB, stB, Fx(fB, c1B, c2B, kB, kcB, szB), Mk(mkB, mbB, mrB, mnB, mbbB), mpB, hB, wB, uv); }
 `
 const SINGLE = `vec4 transition(vec2 uv) { return getFromColor(uv); }`
 const FADE = `vec4 transition(vec2 uv) { return mix(getFromColor(uv), getToColor(uv), progress); }`
@@ -228,6 +232,130 @@ export function createRenderer(canvas) {
   }
   const polyA = makePolyTex(2)
   const polyB = makePolyTex(3)
+  const blurDummyA = makeTex(4)
+  const blurDummyB = makeTex(5)
+  for (const [unit, tx] of [[4, blurDummyA], [5, blurDummyB]]) {
+    gl.activeTexture(gl.TEXTURE0 + unit)
+    gl.bindTexture(gl.TEXTURE_2D, tx)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]))
+  }
+
+  // ---- Gaussian blur, in passes of its own ----
+  // The picture is halved (box filtered, one halving per pass) until the blur is small enough to be done with a few dozen
+  // taps, then blurred along x and along y with real Gaussian weights. The result is a texture the layer's shader reads.
+  const copyProg = (() => {
+    const fs = gl.createShader(gl.FRAGMENT_SHADER)
+    gl.shaderSource(fs, 'precision mediump float; varying vec2 _uv; uniform sampler2D tex; void main() { gl_FragColor = texture2D(tex, _uv); }')
+    gl.compileShader(fs)
+    const prog = gl.createProgram()
+    gl.attachShader(prog, vs)
+    gl.attachShader(prog, fs)
+    gl.bindAttribLocation(prog, 0, 'pos')
+    gl.linkProgram(prog)
+    return { prog, tex: gl.getUniformLocation(prog, 'tex') }
+  })()
+  const blurProg = (() => {
+    const fs = gl.createShader(gl.FRAGMENT_SHADER)
+    gl.shaderSource(
+      fs,
+      `precision highp float; varying vec2 _uv; uniform sampler2D tex; uniform vec2 dir; uniform float sigma;
+      void main() {
+        vec4 acc = vec4(0.0);
+        float ws = 0.0;
+        for (int i = -24; i <= 24; i++) {
+          float fi = float(i);
+          float w = exp(-(fi * fi) / (2.0 * sigma * sigma));
+          acc += texture2D(tex, _uv + dir * fi) * w;
+          ws += w;
+        }
+        gl_FragColor = acc / ws;
+      }`
+    )
+    gl.compileShader(fs)
+    const prog = gl.createProgram()
+    gl.attachShader(prog, vs)
+    gl.attachShader(prog, fs)
+    gl.bindAttribLocation(prog, 0, 'pos')
+    gl.linkProgram(prog)
+    return { prog, tex: gl.getUniformLocation(prog, 'tex'), dir: gl.getUniformLocation(prog, 'dir'), sigma: gl.getUniformLocation(prog, 'sigma') }
+  })()
+  const blurTargets = new Map() // 'A:2:960x540' -> {tex, fbo, w, h}
+  function blurTarget(key, w, h) {
+    const k = `${key}:${w}x${h}`
+    let t = blurTargets.get(k)
+    if (t) return t
+    const tex = gl.createTexture()
+    gl.activeTexture(gl.TEXTURE6)
+    gl.bindTexture(gl.TEXTURE_2D, tex)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+    const fbo = gl.createFramebuffer()
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo)
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0)
+    t = { tex, fbo, w, h }
+    blurTargets.set(k, t)
+    if (blurTargets.size > 40) {
+      const old = blurTargets.keys().next().value
+      const o = blurTargets.get(old)
+      gl.deleteTexture(o.tex)
+      gl.deleteFramebuffer(o.fbo)
+      blurTargets.delete(old)
+    }
+    return t
+  }
+  // one full-screen pass of `prog` from texture `src` into target `dst`
+  function pass(prog, src, dst, setup) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo)
+    gl.viewport(0, 0, dst.w, dst.h)
+    gl.useProgram(prog.prog)
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf)
+    gl.enableVertexAttribArray(0)
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
+    gl.activeTexture(gl.TEXTURE6)
+    gl.bindTexture(gl.TEXTURE_2D, src)
+    gl.uniform1i(prog.tex, 6)
+    if (setup) setup()
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+  }
+  // blur the picture in `srcTex` (w x h) with a Gaussian of sigma `sigma` (in its own pixels); returns the texture
+  function blurPass(srcTex, w, h, sigma, side) {
+    gl.disable(gl.BLEND)
+    let k = 1
+    while (sigma / k > 6 && k < 32) k *= 2
+    let cur = srcTex
+    for (let s = 2; s <= k; s *= 2) {
+      const dst = blurTarget(`${side}d${s}`, Math.max(2, Math.ceil(w / s)), Math.max(2, Math.ceil(h / s)))
+      pass(copyProg, cur, dst)
+      cur = dst.tex
+    }
+    const bw = Math.max(2, Math.ceil(w / k))
+    const bh = Math.max(2, Math.ceil(h / k))
+    const sg = Math.max(0.3, sigma / k)
+    const th = blurTarget(`${side}h`, bw, bh)
+    const tv = blurTarget(`${side}v`, bw, bh)
+    pass(blurProg, cur, th, () => {
+      gl.uniform2f(blurProg.dir, 1 / bw, 0)
+      gl.uniform1f(blurProg.sigma, sg)
+    })
+    pass(blurProg, th.tex, tv, () => {
+      gl.uniform2f(blurProg.dir, 0, 1 / bh)
+      gl.uniform1f(blurProg.sigma, sg)
+    })
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.viewport(0, 0, canvas.width, canvas.height)
+    gl.enable(gl.BLEND)
+    return tv.tex
+  }
+  // how big the blur is: slider 0..1 -> a Gaussian sigma in pixels of the picture (6% of the frame height at the top, gentle
+  // at the low end), measured in the frame so the same setting looks the same at 720p and 4K
+  const blurSigma = (b, w, h) => {
+    const perFrame = canvas.height * 0.06 * Math.pow(Math.min(1, Math.max(0, b)), 1.6)
+    const srcPerFrame = Math.max(w / canvas.width, h / canvas.height) // picture pixels per frame pixel (the picture is fitted into the frame)
+    return Math.max(0.3, perFrame * srcPerFrame)
+  }
   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
 
   // Returns {prog, loc, extras} or throws an Error with the compiler log.
@@ -251,7 +379,7 @@ export function createRenderer(canvas) {
     return {
       prog,
       extras,
-      loc: { from: u('from'), to: u('to'), progress: u('progress'), ratio: u('ratio'), sA: u('sA'), sB: u('sB'), tfA: u('tfA'), tfB: u('tfB'), pA: u('pA'), pB: u('pB'), stA: u('stA'), stB: u('stB'), hA: u('hA'), hB: u('hB'), wA: u('wA'), wB: u('wB'), fA: u('fA'), fB: u('fB'), c1A: u('c1A'), c1B: u('c1B'), c2A: u('c2A'), c2B: u('c2B'), kA: u('kA'), kB: u('kB'), kcA: u('kcA'), kcB: u('kcB'), szA: u('szA'), szB: u('szB'), mkA: u('mkA'), mkB: u('mkB'), mbA: u('mbA'), mbB: u('mbB'), mrA: u('mrA'), mrB: u('mrB'), mnA: u('mnA'), mnB: u('mnB'), mpA: u('mpA'), mpB: u('mpB'), mbbA: u('mbbA'), mbbB: u('mbbB') },
+      loc: { from: u('from'), to: u('to'), progress: u('progress'), ratio: u('ratio'), sA: u('sA'), sB: u('sB'), tfA: u('tfA'), tfB: u('tfB'), pA: u('pA'), pB: u('pB'), stA: u('stA'), stB: u('stB'), hA: u('hA'), hB: u('hB'), wA: u('wA'), wB: u('wB'), fA: u('fA'), fB: u('fB'), c1A: u('c1A'), c1B: u('c1B'), c2A: u('c2A'), c2B: u('c2B'), kA: u('kA'), kB: u('kB'), kcA: u('kcA'), kcB: u('kcB'), szA: u('szA'), szB: u('szB'), mkA: u('mkA'), mkB: u('mkB'), mbA: u('mbA'), mbB: u('mbB'), mrA: u('mrA'), mrB: u('mrB'), mnA: u('mnA'), mnB: u('mnB'), mpA: u('mpA'), mpB: u('mpB'), mbbA: u('mbbA'), mbbB: u('mbbB'), blA: u('blA'), blB: u('blB') },
     }
   }
 
@@ -277,6 +405,8 @@ export function createRenderer(canvas) {
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
     gl.uniform1i(p.loc.from, 0)
     gl.uniform1i(p.loc.to, 1)
+    gl.uniform1i(p.loc.blA, 4)
+    gl.uniform1i(p.loc.blB, 5)
     gl.uniform1f(p.loc.progress, progress)
     gl.uniform1f(p.loc.ratio, canvas.width / canvas.height)
     gl.uniform2f(p.loc.sA, sA[0], sA[1])
@@ -351,11 +481,19 @@ export function createRenderer(canvas) {
     }
     const sA = scaleFor(A.w, A.h)
     const tA = shaderTransform(A.tf, A.warp, A.fx, A.mask)
+    const tBB = B ? shaderTransform(B.tf, B.warp, B.fx, B.mask) : null
+    // blurred copies of the pictures that have a blur (made first; the layer's shader then reads them)
+    const bA = tA.fu.f[0] > 0.004 ? blurPass(texA, A.w, A.h, blurSigma(tA.fu.f[0], A.w, A.h), 'A') : null
+    const bB = B && tBB.fu.f[0] > 0.004 ? blurPass(texB, B.w, B.h, blurSigma(tBB.fu.f[0], B.w, B.h), 'B') : null
+    gl.activeTexture(gl.TEXTURE4)
+    gl.bindTexture(gl.TEXTURE_2D, bA || blurDummyA)
+    gl.activeTexture(gl.TEXTURE5)
+    gl.bindTexture(gl.TEXTURE_2D, bB || blurDummyB)
     gl.enable(gl.BLEND)
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
     if (B) {
       const p = lib.get(name) || fade
-      use(p, Math.min(1, Math.max(0, progress)), sA, scaleFor(B.w, B.h), tA, shaderTransform(B.tf, B.warp, B.fx, B.mask), [A.w, A.h], [B.w, B.h])
+      use(p, Math.min(1, Math.max(0, progress)), sA, scaleFor(B.w, B.h), tA, tBB, [A.w, A.h], [B.w, B.h])
     } else {
       use(single, 0, sA, sA, tA, tA, [A.w, A.h], [A.w, A.h])
     }
@@ -377,5 +515,95 @@ export function createRenderer(canvas) {
     gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, buf)
   }
 
-  return { render, renderLayers, clear, read, addTransition, has: (n) => lib.has(n) }
+  // ---- the frame as planar YUV 4:2:0 (what the encoder wants), made on the graphics card ----
+  // That is 1.5 bytes per pixel instead of 4, and the encoder does not have to convert: 2 to 3 times faster to hand over.
+  // Colours as ffmpeg's own conversion does them (BT.601, limited range). The picture comes out top row first.
+  // Packed as RGBA texels: a row of the texture is w bytes; rows 0..h-1 are Y, then h/4 rows of U, then h/4 rows of V.
+  const yuvProg = (() => {
+    const fs = gl.createShader(gl.FRAGMENT_SHADER)
+    gl.shaderSource(
+      fs,
+      `precision highp float; uniform sampler2D src; uniform vec2 sz;
+      float Yv(vec3 c) { return (16.0 + 65.481 * c.r + 128.553 * c.g + 24.966 * c.b) / 255.0; }
+      float Uv(vec3 c) { return (128.0 - 37.797 * c.r - 74.203 * c.g + 112.0 * c.b) / 255.0; }
+      float Vv(vec3 c) { return (128.0 + 112.0 * c.r - 93.786 * c.g - 18.214 * c.b) / 255.0; }
+      void main() {
+        float tx = floor(gl_FragCoord.x);
+        float ty = floor(gl_FragCoord.y);
+        float w = sz.x;
+        float h = sz.y;
+        vec4 o = vec4(0.0);
+        for (int k = 0; k < 4; k++) {
+          float bx = tx * 4.0 + float(k);
+          float val;
+          if (ty < h) {
+            val = Yv(texture2D(src, vec2((bx + 0.5) / w, 1.0 - (ty + 0.5) / h)).rgb);
+          } else {
+            float t2 = ty - h;
+            float q = h * 0.25;
+            bool isV = t2 >= q;
+            float r2 = isV ? t2 - q : t2;
+            bool right = bx >= w * 0.5;
+            float cr = r2 * 2.0 + (right ? 1.0 : 0.0);
+            float cx = right ? bx - w * 0.5 : bx;
+            // between the 4 pixels of the block: the linear filter averages them
+            vec3 c = texture2D(src, vec2((2.0 * cx + 1.0) / w, 1.0 - (2.0 * cr + 1.0) / h)).rgb;
+            val = isV ? Vv(c) : Uv(c);
+          }
+          if (k == 0) o.r = val; else if (k == 1) o.g = val; else if (k == 2) o.b = val; else o.a = val;
+        }
+        gl_FragColor = o;
+      }`
+    )
+    gl.compileShader(fs)
+    const prog = gl.createProgram()
+    gl.attachShader(prog, vs)
+    gl.attachShader(prog, fs)
+    gl.bindAttribLocation(prog, 0, 'pos')
+    gl.linkProgram(prog)
+    return { prog, tex: gl.getUniformLocation(prog, 'src'), sz: gl.getUniformLocation(prog, 'sz') }
+  })()
+  let frameCopy = null
+  // can a frame of this size be made as YUV (the packing needs the width to be a multiple of 8 and the height of 4)?
+  const canYuv = () => canvas.width % 8 === 0 && canvas.height % 4 === 0
+  function readYuv(out) {
+    const w = canvas.width
+    const h = canvas.height
+    gl.disable(gl.BLEND)
+    gl.disable(gl.DITHER)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.activeTexture(gl.TEXTURE7)
+    if (!frameCopy || frameCopy.w !== w || frameCopy.h !== h) {
+      if (frameCopy) gl.deleteTexture(frameCopy.tex)
+      const tex = gl.createTexture()
+      gl.bindTexture(gl.TEXTURE_2D, tex)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.copyTexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 0, 0, w, h, 0)
+      frameCopy = { tex, w, h }
+    } else {
+      gl.bindTexture(gl.TEXTURE_2D, frameCopy.tex)
+      gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, w, h)
+    }
+    const rows = h + h / 2
+    const dst = blurTarget('yuv', w / 4, rows)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, dst.fbo)
+    gl.viewport(0, 0, w / 4, rows)
+    gl.useProgram(yuvProg.prog)
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf)
+    gl.enableVertexAttribArray(0)
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
+    gl.uniform1i(yuvProg.tex, 7)
+    gl.uniform2f(yuvProg.sz, w, h)
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+    gl.readPixels(0, 0, w / 4, rows, gl.RGBA, gl.UNSIGNED_BYTE, out)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.viewport(0, 0, w, h)
+    gl.enable(gl.BLEND)
+    gl.enable(gl.DITHER)
+  }
+
+  return { render, renderLayers, clear, read, readYuv, canYuv, addTransition, has: (n) => lib.has(n) }
 }

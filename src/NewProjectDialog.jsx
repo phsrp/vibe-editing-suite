@@ -46,6 +46,11 @@ export default function NewProjectDialog({ onCreate, onClose }) {
                 <b>Image project</b>
                 <span>Layers, painting, text, masks and effects, exported as a picture.</span>
               </button>
+              <button className="kind-card" onClick={() => onCreate('picture')}>
+                <Icon name="image" size={34} />
+                <b>Edit a picture</b>
+                <span>Open a picture from your computer to paint on, add layers to, and save again.</span>
+              </button>
               <button className="kind-card" onClick={() => (setWhat('drawing'), setStep('image'))}>
                 <Icon name="pen" size={34} />
                 <b>Drawing</b>

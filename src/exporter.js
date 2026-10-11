@@ -231,7 +231,13 @@ export async function runExport({ state, settings, transitions, outPath, onProgr
       canvas.height = h
       const renderer = createRenderer(canvas)
       for (const t of transitions) renderer.addTransition(t.name, t.source)
-      const buf = new Uint8Array(w * h * 4)
+      // Frames come out of the graphics card as planar YUV 4:2:0 when the size allows it (1.5 bytes a pixel instead of 4, and the
+      // encoder does not have to convert), and go to the encoder without waiting for each one to be taken: up to 3 are on their
+      // way, each in its own buffer, in order.
+      const yuv = renderer.canYuv()
+      const ring = [0, 1, 2].map(() => new Uint8Array(yuv ? (w * h * 3) / 2 : w * h * 4))
+      const flying = []
+      const LOOK = 6 // frames decoded ahead, on other threads
 
       for (let ti = 0; ti < trans.length; ti++) {
         const s = trans[ti]
@@ -247,7 +253,7 @@ export async function runExport({ state, settings, transitions, outPath, onProgr
           x.info = await window.api.exportExtract({ name: `t${s.k}l${x.li}${x.which}`, file: x.side.file, isImage: x.side.isImage, start: x.side.start, dur: s.dur * (x.side.speed || 1), speed: x.side.speed || 1, fps, w, h, maxFrames: s.frames + 2, noPad: true })
         }
         if (cancelled) throw new Error('Export cancelled')
-        await window.api.exportSegBegin({ k: s.k, w, h, fps })
+        await window.api.exportSegBegin({ k: s.k, w, h, fps, yuv })
         const cache = new Map()
         const textCvs = new Map()
         for (const l of s.layers) if (l.a.isText) await loadFont(l.a.clip.text)
@@ -257,16 +263,22 @@ export async function runExport({ state, settings, transitions, outPath, onProgr
           if (cache.has(ck)) return cache.get(ck)
           const img = new Image()
           img.src = toUrl(`${x.info.dir}\\${pad5(idx + 1)}.png`)
-          const p = img.decode().then(() => img)
+          // an ImageBitmap that is already flipped the way the renderer wants it uploads without a slow flip on the CPU
+          const p = img.decode().then(() => createImageBitmap(img, { imageOrientation: 'flipY', premultiplyAlpha: 'none', colorSpaceConversion: 'none' }))
           cache.set(ck, p)
-          if (cache.size > 6 + srcs.length * 2) cache.delete(cache.keys().next().value)
+          if (cache.size > LOOK * srcs.length + 8) cache.delete(cache.keys().next().value)
           return p
         }
-        let next = srcs.map((x) => load(x, 0))
+        const pending = new Map() // frame number -> its pictures
+        const want = (j) => {
+          if (j < s.frames && !pending.has(j)) pending.set(j, srcs.map((x) => load(x, j)))
+        }
+        for (let j = 0; j < LOOK; j++) want(j)
         for (let i = 0; i < s.frames; i++) {
           if (cancelled) throw new Error('Export cancelled')
-          const imgs = await Promise.all(next)
-          if (i + 1 < s.frames) next = srcs.map((x) => load(x, i + 1)) // load the next frames while this one renders
+          const imgs = await Promise.all(pending.get(i))
+          pending.delete(i)
+          for (let j = 1; j <= LOOK; j++) want(i + j) // decode the next frames while this one renders
           const imgOf = new Map(srcs.map((x, j) => [`${x.li}${x.which}`, imgs[j]]))
           // each clip's motion and warp at the source time of this frame
           const sideOf = (li, which, sd) => {
@@ -284,7 +296,7 @@ export async function runExport({ state, settings, transitions, outPath, onProgr
               return { el: cv, w, h, tf: evalTransform(sd.clip, ts), warp: evalWarp(sd.clip, ts), fx: sd.clip.fx, mask: maskAt(sd.clip, ts) }
             }
             const img = imgOf.get(`${li}${which}`)
-            return { el: img, w: img.naturalWidth, h: img.naturalHeight, tf: evalTransform(sd.clip, ts), warp: evalWarp(sd.clip, ts), fx: sd.clip.fx, mask: maskAt(sd.clip, ts) }
+            return { el: img, w: img.width, h: img.height, tf: evalTransform(sd.clip, ts), warp: evalWarp(sd.clip, ts), fx: sd.clip.fx, mask: maskAt(sd.clip, ts) }
           }
           renderer.renderLayers(
             s.layers.map((l, li) => ({
@@ -295,11 +307,15 @@ export async function runExport({ state, settings, transitions, outPath, onProgr
             }))
           )
           if (onPreview && i % 3 === 0) onPreview(canvas)
-          renderer.read(buf)
-          await window.api.exportFrame(buf)
+          const slot = ring[i % ring.length]
+          if (yuv) renderer.readYuv(slot)
+          else renderer.read(slot)
+          flying.push(window.api.exportFrame(slot))
+          if (flying.length >= ring.length) await flying.shift()
           doneT++
           report(label)
         }
+        await Promise.all(flying.splice(0))
         await window.api.exportSegEnd()
       }
     }

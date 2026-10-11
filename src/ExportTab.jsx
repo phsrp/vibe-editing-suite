@@ -232,6 +232,17 @@ export default function ExportTab({ active, getProject, onStatus }) {
                 ))}
               </select>
 
+              {gpu && s.encoder !== 'cpu' && encoder === 'cpu' && (
+                <div className="hint warn" style={{ gridColumn: '1 / -1' }}>
+                  The graphics card encoder you chose was not found on this PC, so the <b>processor</b> will be used. That is much slower.
+                </div>
+              )}
+              {encoder === 'cpu' && s.codec === 'h265' && s.speed === 'best' && (
+                <div className="hint warn" style={{ gridColumn: '1 / -1' }}>
+                  <b>H.265 with “Best quality” on the processor is very slow</b>: on a fast PC it took about 4 to 5 times the length of the video at 1080p 60 fps
+                  (a 2 minute video: about 9 minutes). Use a graphics card encoder (about 1 minute), or pick Balanced / H.264.
+                </div>
+              )}
               <label>Audio tracks</label>
               <select disabled={running} value={s.audioMode} onChange={(e) => set({ audioMode: e.target.value })}>
                 <option value="mix">Mix everything into one track</option>

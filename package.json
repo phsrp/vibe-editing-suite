@@ -1,6 +1,6 @@
 {
   "name": "vibe-video-editor",
-  "version": "1.7.3",
+  "version": "1.7.4",
   "description": "Video, image and drawing editor suite with PowerPoint-style GL transitions, layers and AI masks",
   "main": "electron/main.js",
   "author": "Vibe Editing Suite",

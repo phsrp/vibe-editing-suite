@@ -1,2 +1,4 @@
-- Drawing editor: add pictures as layers (references, photos to paint over) with + Picture in the Layers panel, by dropping them onto the window, or with Ctrl+V; the Move tool shows a box around a layer, drag it to move and drag a corner to resize
-- Smoother scrubbing: dragging the playhead now follows the video properly for Full HD videos with few keyframes (common for screen recordings), by making the small preview copy for them too
+- Edit a picture from your computer: New project > Edit a picture opens any picture in the drawing editor at its own size, so you can paint on it, add layers and export it again
+- Better blur in the video and image editors: a real Gaussian blur that looks smooth at every strength and the same at any resolution
+- Faster exports of clips with effects, transitions or overlays (frames are handed to the encoder in a smaller, faster form)
+- The Export tab now warns when a graphics card encoder is not found, and when H.265 on the processor with Best quality will be very slow

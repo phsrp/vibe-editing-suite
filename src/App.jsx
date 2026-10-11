@@ -101,12 +101,20 @@ export default function App() {
     setActiveId(id)
   }
   // the "New project" answer: video, or image with its canvas
-  const createProject = (kind, canvas) => {
+  const createProject = async (kind, canvas) => {
     setChooser(false)
+    // "Edit a picture": choose a picture file; it opens in the drawing editor, on a canvas of its own size
+    if (kind === 'picture') {
+      const items = await window.api.importMedia('image')
+      const it = (items || []).find((x) => x.type === 'image')
+      if (it) newTab({ picture: { path: it.path, name: it.name, w: it.width, h: it.height } }, 'drawing')
+      return
+    }
     newTab(kind === 'image' || kind === 'drawing' ? { canvas } : null, kind)
   }
   useEffect(() => {
     window.__newTab = createProject // developer self-test
+    window.__openPicture = (pic) => newTab({ picture: pic }, 'drawing')
   })
   // each project can have an Export tab next to it (settings, and the video as it is being made)
   const openExport = (projectId) => {

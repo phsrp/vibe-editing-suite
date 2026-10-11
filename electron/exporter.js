@@ -335,12 +335,15 @@ function register({ ffmpegPath, getWindow }) {
   })
 
   // Rendered transition frames arrive one at a time and are piped into an encoder.
-  ipcMain.handle('export:segBegin', (_e, { k, w, h, fps }) => {
+  ipcMain.handle('export:segBegin', (_e, { k, w, h, fps, yuv }) => {
     const out = path.join(job.dir, `seg_${k}.mp4`)
     const proc = track(
       spawn(
         ffmpegPath,
-        ['-y', '-v', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${w}x${h}`, '-r', String(fps), '-i', 'pipe:0', '-vf', 'vflip', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '12', '-pix_fmt', 'yuv420p', out],
+        yuv
+          ? // frames come as planar YUV from the graphics card, top row first
+            ['-y', '-v', 'error', '-f', 'rawvideo', '-pix_fmt', 'yuv420p', '-s', `${w}x${h}`, '-r', String(fps), '-i', 'pipe:0', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '12', '-pix_fmt', 'yuv420p', out]
+          : ['-y', '-v', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgba', '-s', `${w}x${h}`, '-r', String(fps), '-i', 'pipe:0', '-vf', 'vflip', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '12', '-pix_fmt', 'yuv420p', out],
         { windowsHide: true }
       )
     )
