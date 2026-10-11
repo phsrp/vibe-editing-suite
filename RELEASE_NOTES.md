@@ -1,2 +1,2 @@
-- Discord Rich Presence: your Discord profile can show "Playing Vibe Editing Suite" with what you are doing (editing a video, drawing...) and a button to the GitHub page
-- New switches in Settings > General: turn it off, or choose to show the project name (off by default)
+- Drawing editor: add pictures as layers (references, photos to paint over) with + Picture in the Layers panel, by dropping them onto the window, or with Ctrl+V; the Move tool shows a box around a layer, drag it to move and drag a corner to resize
+- Smoother scrubbing: dragging the playhead now follows the video properly for Full HD videos with few keyframes (common for screen recordings), by making the small preview copy for them too

@@ -192,7 +192,7 @@ function LayerThumb({ layer, rev }) {
   return <canvas ref={ref} width={44} height={30} className="dr-lthumb" />
 }
 
-export function LayersPanel({ doc, rev, open, setOpen }) {
+export function LayersPanel({ doc, rev, open, setOpen, onAddPicture, busy }) {
   const [edit, setEdit] = useState(null)
   const [drag, setDrag] = useState(null)
   const rows = doc.layers.slice().reverse()
@@ -213,6 +213,7 @@ export function LayersPanel({ doc, rev, open, setOpen }) {
       </div>
       <div className="btn-row layer-add">
         <button className="mini wide" onClick={() => doc.addLayer(null, { above: doc.activeId })} title="Add an empty layer above the chosen one">+ Layer</button>
+        <button className="mini wide" onClick={onAddPicture} disabled={busy} title="Add a picture from your computer as a new layer (a reference, a photo to paint over...). You can also drop pictures onto the window.">+ Picture</button>
         <button className="mini wide" disabled={!act} onClick={() => act && doc.duplicateLayer(act.id)} title="Copy the chosen layer">Duplicate</button>
       </div>
       {act && (

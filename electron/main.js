@@ -32,8 +32,26 @@ async function probe(file) {
   let duration = parseFloat(info.format.duration)
   if (!isFinite(duration)) duration = 5
   const type = isImage ? 'image' : video ? 'video' : audio.length ? 'audio' : null
+  // how far apart the keyframes are (seconds, longest gap in the first minute): a long gap makes jumping around slow,
+  // because every jump has to be decoded from the keyframe before it
+  let gop = 0
+  if (type === 'video') {
+    try {
+      const k = await run(ffprobePath, ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'packet=pts_time,flags', '-of', 'csv=p=0', '-read_intervals', '%+60', file])
+      let prev = null
+      for (const line of k.split('\n')) {
+        const [t, fl] = line.trim().split(',')
+        if (!fl || !fl.includes('K')) continue
+        const x = parseFloat(t)
+        if (!isFinite(x)) continue
+        if (prev != null && x - prev > gop) gop = x - prev
+        prev = x
+      }
+    } catch {}
+  }
   return {
     type,
+    gop,
     duration: isImage ? 5 : duration,
     width: video ? video.width : 0,
     height: video ? video.height : 0,
@@ -217,7 +235,9 @@ const needsProxy = (info) => {
   const mode = (readSettings().proxyMode || 'auto')
   if (mode === 'off' || info.type !== 'video') return false
   if (mode === 'always') return true
-  return Math.max(info.width, info.height) > 1920 || (info.bitrate || 0) > 35e6
+  // big or heavy videos, and Full HD+ videos with far-apart keyframes (screen recordings are often like that):
+  // those are slow to scrub, because every jump is decoded from the keyframe before it
+  return Math.max(info.width, info.height) > 1920 || (info.bitrate || 0) > 35e6 || (info.gop > 1.5 && Math.max(info.width, info.height) >= 1920)
 }
 const proxyJobs = new Set()
 const proxyQueue = []
@@ -1081,6 +1101,10 @@ ipcMain.handle('history:read', (_e, { key, id }) => {
 // The microphone (voice-over recording): allowed for this app's own window only. In developer tests a fake
 // microphone is used so nothing needs to be plugged in.
 if (process.env.VIBE_SELFTEST) {
+  // a test window may be covered by other windows: it must still run at full speed
+  app.commandLine.appendSwitch('disable-renderer-backgrounding')
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+  app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
   app.commandLine.appendSwitch('use-fake-device-for-media-stream')
   app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
 }

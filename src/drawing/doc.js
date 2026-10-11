@@ -147,6 +147,32 @@ export class Doc {
     c.getContext('2d').drawImage(layer.canvas, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h)
     return c
   }
+  // the box around everything painted on a layer ({x, y, w, h}), or null for an empty layer
+  contentBounds(layer) {
+    const w = this.w
+    const h = this.h
+    const d = layer.canvas.getContext('2d').getImageData(0, 0, w, h).data
+    let x0 = w
+    let y0 = h
+    let x1 = -1
+    let y1 = -1
+    for (let y = 0; y < h; y++) {
+      let rowHit = false
+      const o = y * w * 4
+      for (let x = 0; x < w; x++) {
+        if (d[o + x * 4 + 3] > 8) {
+          rowHit = true
+          if (x < x0) x0 = x
+          if (x > x1) x1 = x
+        }
+      }
+      if (rowHit) {
+        if (y < y0) y0 = y
+        y1 = y
+      }
+    }
+    return x1 < 0 ? null : { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }
+  }
   clampRect(r) {
     const x = Math.max(0, Math.floor(r.x))
     const y = Math.max(0, Math.floor(r.y))

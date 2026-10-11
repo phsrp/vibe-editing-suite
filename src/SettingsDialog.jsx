@@ -249,12 +249,12 @@ export default function SettingsDialog({ settings, setSettings, theme, setTheme,
                   <div>
                     <div className="set-title">Smooth preview for big videos</div>
                     <div className="hint left">
-                      4K and very heavy videos get a small copy in the background, so the preview plays and jumps around smoothly. The export always uses your original file.
+                      4K, very heavy videos and videos with few keyframes (common for screen recordings) get a small copy in the background, so the preview plays and jumps around smoothly. The export always uses your original file.
                       {px && px.count > 0 ? ` Copies on this PC: ${px.count} (${MB(px.bytes)}).` : ''}
                     </div>
                   </div>
                   <select value={settings.proxyMode || 'auto'} onChange={(e) => setSettings({ proxyMode: e.target.value })}>
-                    <option value="auto">Auto (big videos only)</option>
+                    <option value="auto">Auto (big or hard-to-scrub videos)</option>
                     <option value="always">Every video</option>
                     <option value="off">Off</option>
                   </select>

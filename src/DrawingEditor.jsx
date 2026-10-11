@@ -3,6 +3,7 @@ import Icon from './Icon.jsx'
 import { actionFor } from './keybinds.js'
 import { Doc } from './drawing/doc.js'
 import { promptFromLoop } from './smartMask.js'
+import { toUrl } from './state.js'
 import { Stroke, Smudge, mergeBuffer, ellipsePoints, rectPoints, floodMask, maskToCanvas, objectMask, newCanvas, hexToRgb, rgbToHex } from './drawing/engine.js'
 import { builtinBrushes } from './drawing/builtinBrushes.js'
 import * as kritaBrush from './drawing/kritaBrush.js'
@@ -210,6 +211,21 @@ export default function DrawingEditor({ tabId, active, initial, binds, onMeta, o
   const cursorRef = useRef(null) // {x, y} in screen pixels of the canvas element
   const drawQueued = useRef(false)
   const pattern = useRef(null)
+
+  // the box around a layer's content, looked up again only when the picture changed
+  const boundsCache = useRef({ layerId: null, rev: -2, b: null })
+  const layerBounds = (layer) => {
+    const c = boundsCache.current
+    const d = docRef.current
+    if (c.layerId === layer.id && c.rev === d.rev) return c.b
+    if (c.layerId === layer.id && c.rev === -1) {
+      boundsCache.current = { layerId: layer.id, rev: d.rev, b: c.b } // set live while resizing
+      return c.b
+    }
+    const b = d.contentBounds(layer)
+    boundsCache.current = { layerId: layer.id, rev: d.rev, b }
+    return b
+  }
 
   const matrix = () => {
     const v = viewRef.current
@@ -421,6 +437,27 @@ export default function DrawingEditor({ tabId, active, initial, binds, onMeta, o
       g.stroke()
       g.setLineDash([])
     }
+    // the Move tool: the box around what is on the layer, with corner handles to resize it
+    if (toolRef.current === 'move' && d.active && d.active.visible) {
+      const lb = layerBounds(d.active)
+      if (lb) {
+        const p = [S(lb.x, lb.y), S(lb.x + lb.w, lb.y), S(lb.x + lb.w, lb.y + lb.h), S(lb.x, lb.y + lb.h)]
+        g.beginPath()
+        g.moveTo(p[0].x, p[0].y)
+        p.slice(1).forEach((q) => g.lineTo(q.x, q.y))
+        g.closePath()
+        g.lineWidth = 1.5
+        g.strokeStyle = '#c4a7e7'
+        g.setLineDash([])
+        g.stroke()
+        for (const q of p) {
+          g.fillStyle = '#fff'
+          g.fillRect(q.x - 5, q.y - 5, 10, 10)
+          g.strokeStyle = '#26233a'
+          g.strokeRect(q.x - 5, q.y - 5, 10, 10)
+        }
+      }
+    }
     // mirror guides
     const o = optsRef.current
     g.strokeStyle = 'rgba(196,167,231,.8)'
@@ -603,7 +640,21 @@ export default function DrawingEditor({ tabId, active, initial, binds, onMeta, o
       return
     }
     if (t === 'move') {
-      gesture.current = { kind: 'move', start: p, before: d.grab(layer, { x: 0, y: 0, w: d.w, h: d.h }), layer }
+      // a corner of the box around the layer's content resizes it (keeping its proportions); anywhere else moves it
+      const b = layerBounds(layer)
+      const full = { x: 0, y: 0, w: d.w, h: d.h }
+      if (b) {
+        const cs = [[b.x, b.y, 'tl'], [b.x + b.w, b.y, 'tr'], [b.x + b.w, b.y + b.h, 'br'], [b.x, b.y + b.h, 'bl']]
+        const hit = cs.find((c) => {
+          const s = toScreen(c[0], c[1])
+          return Math.hypot(s.x - (e.clientX - rect.left), s.y - (e.clientY - rect.top)) < 12
+        })
+        if (hit) {
+          gesture.current = { kind: 'layerscale', layer, corner: hit[2], orig: b, before: d.grab(layer, full) }
+          return
+        }
+      }
+      gesture.current = { kind: 'move', start: p, before: d.grab(layer, full), layer }
       return
     }
     if (t === 'smudge') {
@@ -744,6 +795,34 @@ export default function DrawingEditor({ tabId, active, initial, binds, onMeta, o
       const p = point(e, rect)
       docRef.current.shiftLayer(gst.layer, gst.before, p.x - gst.start.x, p.y - gst.start.y)
       docRef.current.changed(true)
+    } else if (gst.kind === 'layerscale') {
+      // the opposite corner stays where it is; the content is redrawn from the original each time (no blur from repeats)
+      const p = point(e, rect)
+      const o = gst.orig
+      const ratio = o.w / o.h
+      const ax = gst.corner === 'tl' || gst.corner === 'bl' ? o.x + o.w : o.x
+      const ay = gst.corner === 'tl' || gst.corner === 'tr' ? o.y + o.h : o.y
+      let w = Math.max(8, Math.abs(p.x - ax))
+      let h = w / ratio
+      if (Math.abs(p.y - ay) > h) {
+        h = Math.abs(p.y - ay)
+        w = h * ratio
+      }
+      const x = gst.corner === 'tl' || gst.corner === 'bl' ? ax - w : ax
+      const y = gst.corner === 'tl' || gst.corner === 'tr' ? ay - h : ay
+      const g = gst.layer.canvas.getContext('2d')
+      g.save()
+      g.setTransform(1, 0, 0, 1, 0, 0)
+      g.globalCompositeOperation = 'source-over'
+      g.globalAlpha = 1
+      g.clearRect(0, 0, docRef.current.w, docRef.current.h)
+      g.imageSmoothingEnabled = true
+      g.imageSmoothingQuality = 'high'
+      g.drawImage(gst.before, o.x, o.y, o.w, o.h, x, y, w, h)
+      g.restore()
+      boundsCache.current = { layerId: gst.layer.id, rev: -1, b: { x, y, w, h } }
+      gst.now = { x, y, w, h }
+      docRef.current.changed(true)
     } else if (gst.kind === 'selmove') {
       const p = point(e, rect)
       const dx = Math.round(p.x - gst.start.x)
@@ -817,6 +896,8 @@ export default function DrawingEditor({ tabId, active, initial, binds, onMeta, o
     } else if (gst.kind === 'move') {
       const r = { x: 0, y: 0, w: d.w, h: d.h }
       d.commitPixels(gst.layer, r, gst.before, 'Move layer')
+    } else if (gst.kind === 'layerscale') {
+      if (gst.now) d.commitPixels(gst.layer, { x: 0, y: 0, w: d.w, h: d.h }, gst.before, 'Resize layer')
     } else if (gst.kind === 'selmove') {
       if (gst.moved && (gst.dx || gst.dy)) {
         d.commitPixels(gst.layer, gst.parts.full, gst.parts.before, gst.copy ? 'Copy selection' : 'Move selection')
@@ -892,6 +973,53 @@ export default function DrawingEditor({ tabId, active, initial, binds, onMeta, o
   }, [])
   const onWheelRef = useRef(onWheel)
   onWheelRef.current = onWheel
+
+  // ---- pictures as layers (references, photos to paint over, ...)
+  // The picture goes on a new layer above the chosen one, a bit smaller than the canvas, in the middle. The Move tool then
+  // moves it, and its corner handles resize it.
+  const addPictureLayer = (img, name) => {
+    const d = docRef.current
+    const iw = img.naturalWidth || img.width
+    const ih = img.naturalHeight || img.height
+    const k = Math.min(1, (d.w * 0.6) / iw, (d.h * 0.6) / ih)
+    const w = Math.max(1, iw * k)
+    const h = Math.max(1, ih * k)
+    const l = d.addLayer(name || 'Picture', { above: d.activeId })
+    const g = l.canvas.getContext('2d')
+    g.imageSmoothingQuality = 'high'
+    g.drawImage(img, (d.w - w) / 2, (d.h - h) / 2, w, h)
+    d.changed(true)
+    setTool('move')
+    return l
+  }
+  const loadPictureUrl = (url, name) =>
+    new Promise((resolve) => {
+      const img = new Image()
+      img.onload = () => resolve(addPictureLayer(img, name))
+      img.onerror = () => {
+        flash('That picture could not be opened.')
+        resolve(null)
+      }
+      img.src = url
+    })
+  const importPictures = async () => {
+    setBusy(true)
+    try {
+      const items = await window.api.importMedia('image')
+      for (const it of items || []) if (it.type === 'image') await loadPictureUrl(toUrl(it.path), it.name.replace(/\.[^.]+$/, ''))
+      if (items && items.length) flash('Picture added as a new layer. Drag it to move it, drag a corner to resize it.')
+    } finally {
+      setBusy(false)
+    }
+  }
+  // pictures dropped onto the window become layers
+  const onDropFiles = async (e) => {
+    const files = [...e.dataTransfer.files].filter((f) => /^image\//.test(f.type))
+    if (!files.length) return
+    e.preventDefault()
+    for (const f of files) await loadPictureUrl(URL.createObjectURL(f), f.name.replace(/\.[^.]+$/, ''))
+    flash('Added as a new layer. Drag it to move it, drag a corner to resize it.')
+  }
 
   // ---- smart select (AI, SAM 2): the model is downloaded once on request
   const [models, setModels] = useState(null) // {ready, totalBytes, paths}
@@ -1116,14 +1244,8 @@ export default function DrawingEditor({ tabId, active, initial, binds, onMeta, o
       if (files.length) {
         e.preventDefault()
         try {
-          const bmp = await createImageBitmap(files[0])
-          const l = d.addLayer('Pasted picture')
-          const k = Math.min(1, d.w / bmp.width, d.h / bmp.height)
-          const w = bmp.width * k
-          const h = bmp.height * k
-          l.canvas.getContext('2d').drawImage(bmp, (d.w - w) / 2, (d.h - h) / 2, w, h)
-          d.changed(true)
-          flash('Picture pasted as a new layer. Use the Move tool to place it.')
+          addPictureLayer(await createImageBitmap(files[0]), 'Pasted picture')
+          flash('Picture pasted as a new layer. Drag it to move it, drag a corner to resize it.')
         } catch {
           flash('That picture could not be pasted.')
         }
@@ -1142,7 +1264,7 @@ export default function DrawingEditor({ tabId, active, initial, binds, onMeta, o
   }, [])
 
   // developer self-test hooks
-  if (active) window.__draw = { doc, get brush() { return brushRef.current }, setBrush: pickBrush, setOpts, setFg, setTool, opts: optsRef, view: viewRef, toScreen, toDoc, fit, packs, builtin, flash }
+  if (active) window.__draw = { doc, get brush() { return brushRef.current }, setBrush: pickBrush, setOpts, setFg, setTool, opts: optsRef, view: viewRef, toScreen, toDoc, fit, packs, builtin, flash, loadPictureUrl }
 
   // ---- the tutorial
   const appRef = useRef(null)
@@ -1169,7 +1291,7 @@ export default function DrawingEditor({ tabId, active, initial, binds, onMeta, o
   const shapeTool = ['line', 'rect', 'ellipse'].includes(tool)
 
   return (
-    <div className="app" ref={appRef} style={{ display: active ? undefined : 'none' }}>
+    <div className="app" ref={appRef} style={{ display: active ? undefined : 'none' }} onDragOver={(e) => e.preventDefault()} onDrop={onDropFiles}>
       <header className="topbar">
         <button onClick={onNew} title="Start another project in a new tab">New</button>
         <button onClick={onOpen} title="Open a project in a new tab">Open…</button>
@@ -1200,7 +1322,7 @@ export default function DrawingEditor({ tabId, active, initial, binds, onMeta, o
             <Icon name="rotate" size={17} />
           </button>
         </div>
-        <LayersPanel doc={doc} rev={rev} open={layersOpen} setOpen={setLayersOpen} />
+        <LayersPanel doc={doc} rev={rev} open={layersOpen} setOpen={setLayersOpen} onAddPicture={importPictures} busy={busy} />
         <main className="stage">
           <div className="dr-view" ref={stageRef}>
             <canvas
@@ -1344,7 +1466,7 @@ export default function DrawingEditor({ tabId, active, initial, binds, onMeta, o
                 {gpu && gpu.ok && models && models.ready && <div className="hint-sm">The AI model is ready.</div>}
               </div>
             )}
-            {tool === 'move' && <div className="hint-sm">Drag to slide everything on the chosen layer.</div>}
+            {tool === 'move' && <div className="hint-sm">Drag to slide everything on the chosen layer. Drag a corner of the box to make it bigger or smaller. Add a picture (a reference, a photo) with <b>+ Picture</b> in the Layers panel, or drop it onto the window.</div>}
             {tool === 'eyedropper' && <div className="hint-sm">Click to take a colour from the picture. With any brush, hold Alt and click to do the same.</div>}
             <div className="dr-sec">Brushes</div>
             <BrushList builtin={builtin} packs={packs} current={brush} onPick={pickBrush} onImport={importPacks} onRemovePack={removePack} busy={busy} />
