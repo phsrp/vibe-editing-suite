@@ -70,7 +70,7 @@ function RowLabel({ name, sub, mute, onMute, onRemove, onRename, onGrip, locked,
     </div>
   )
 }
-export default function Timeline({ onCaptions, height, state, dispatch, zoom, setZoom, splitKey, freezeKey, groupKey, ungroupKey, onFreeze, onKeybinds, snapOn, setSnapOn, onCopy, fitRef, miniOn, setMiniOn, rec, onRecord }) {
+export default function Timeline({ onCaptions, height, state, dispatch, zoom, setZoom, splitKey, freezeKey, groupKey, ungroupKey, onFreeze, onKeybinds, snapOn, setSnapOn, rippleOn, setRippleOn, onCopy, fitRef, miniOn, setMiniOn, rec, onRecord }) {
   const scrollRef = useRef(null)
   const innerRef = useRef(null)
   const trackRef = useRef(null) // the ruler lane: reference for time <-> pixel conversion
@@ -160,7 +160,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
   // how many seconds to shift so that one of the edges lands on a snap point (0 when none is close)
   const snapShift = (edges, skip, withPlayhead = true) => {
     if (!snapOn) return 0
-    const thr = 9 / zoom
+    const thr = 10 / zoom
     let best = null
     for (const p of snapPoints(skip, withPlayhead)) for (const e of edges) if (Math.abs(p - e) <= thr && (!best || Math.abs(p - e) < Math.abs(best.d))) best = { d: p - e, p }
     setSnapLine(best ? best.p : null)
@@ -324,10 +324,20 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
     const targetFor = (dx) => indexAtX((c.start + c.dur / 2) * zoom + dx, ids)
     // one clip dragged up onto an overlay track moves to that track
     let over = null
+    // the magnet: the clips that follow on the main track move along, so they are nothing to line up with
+    const moving = clips.filter((x) => ids.has(x.id))
+    const fromIdx = clips.indexOf(moving[0])
+    const skip = new Set([...ids, ...clips.slice(fromIdx).map((x) => x.id)])
+    const snapped = (raw) => {
+      const d = raw / zoom
+      return (d + snapShift(moving.flatMap((b) => [b.start + d, b.start + d + b.dur]), skip)) * zoom
+    }
+    let lastDx = 0
     const move = (ev) => {
-      const dx = ev.clientX - x0
-      if (!moved && Math.abs(dx) < 4) return
+      if (!moved && Math.abs(ev.clientX - x0) < 4) return
       moved = true
+      const dx = snapped(ev.clientX - x0)
+      lastDx = dx
       const tr = ids.size === 1 ? rowUnder(ev.clientY, 'v:') : null
       over = tr && !locked('v:' + tr) ? tr : null
       setDropRow(over ? 'v:' + over : null)
@@ -337,9 +347,10 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
     const up = (ev) => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
-      if (moved && over) dispatch({ type: 'clipToOverlay', id: c.id, trackId: over, start: Math.max(0, c.start + (ev.clientX - x0) / zoom) })
+      setSnapLine(null)
+      if (moved && over) dispatch({ type: 'clipToOverlay', id: c.id, trackId: over, start: Math.max(0, c.start + lastDx / zoom) })
       else if (moved) {
-        const dx = ev.clientX - x0
+        const dx = lastDx
         const idx = targetFor(dx)
         // dragged without passing a neighbour: the empty time in front of the clip changes (a gap, shown as black)
         let gap = 0
@@ -457,10 +468,18 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
     const rev = !!c.reverse
     const srcSide = side === 'in' ? (rev ? 'out' : 'in') : rev ? 'in' : 'out' // a reversed clip's left end is its source out point
     const base = srcSide === 'in' ? c.in : c.out
-    const move = (ev) => dispatch({ type: 'trim', id: c.id, side: srcSide, value: base + (rev ? -1 : 1) * ((ev.clientX - x0) / zoom) * sp })
+    // the clips after this one follow its end, so only the end moves: that is the edge that sticks to things
+    const skip = new Set(clips.slice(clips.findIndex((x) => x.id === c.id)).map((x) => x.id))
+    const edge = side === 'in' ? -1 : 1
+    const move = (ev) => {
+      let dt = (ev.clientX - x0) / zoom
+      dt += edge * snapShift([c.start + c.dur + edge * dt], skip)
+      dispatch({ type: 'trim', id: c.id, side: srcSide, value: base + (rev ? -1 : 1) * dt * sp })
+    }
     const up = () => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
+      setSnapLine(null)
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
@@ -558,6 +577,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
     let started = false
     let overMain = false
     let lastX = x0
+    let lastT = c.start
     const trackUnder = (y) => {
       for (const k of keys) {
         if (!k.startsWith('v:')) continue
@@ -581,8 +601,9 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
       const tr = trackUnder(ev.clientY)
       // one video clip dragged down onto the main track goes there
       const mr = rowEls.current.main && rowEls.current.main.getBoundingClientRect()
-      overMain = !!(mr && !c.text && bases.filter((b) => oclips.some((x) => x.id === b.id)).length === 1 && !locked('main') && ev.clientY >= mr.top && ev.clientY < mr.bottom)
+      overMain = !!(mr && bases.filter((b) => oclips.some((x) => x.id === b.id)).length === 1 && !locked('main') && ev.clientY >= mr.top && ev.clientY < mr.bottom)
       lastX = ev.clientX
+      lastT = c.start + d
       setDropRow(overMain ? 'main' : null)
       dispatch({ type: 'moveItems', moves: bases.map((b) => ({ id: b.id, start: b.start + d, trackId: b.id === c.id ? tr || b.trackId : undefined })) })
     }
@@ -591,7 +612,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
       window.removeEventListener('pointerup', up)
       setSnapLine(null)
       setDropRow(null)
-      if (started && overMain) dispatch({ type: 'overlayToMain', id: c.id, toIndex: indexAtX((c.start + c.dur / 2) * zoom + (lastX - x0), new Set()) })
+      if (started && overMain) dispatch({ type: 'overlayToMain', id: c.id, toIndex: indexAtX((c.start + c.dur / 2) * zoom + (lastX - x0), new Set()), start: lastT })
       if (!started && wasSelected && !mod) dispatch({ type: 'select', id: c.id })
     }
     window.addEventListener('pointermove', move)
@@ -759,7 +780,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
               </div>
             ))}
           {clips.map((c) => {
-            const m = mediaOf(c)
+            const m = c.text ? { type: 'text', name: c.text.content, thumb: null } : mediaOf(c)
             if (!m) return null
             const dragging = drag && drag.ids.has(c.id)
             const nAtt = m.type === 'video' ? (m.audioStreams || []).filter((_, n) => hasAttached(c, m, n)).length : 0
@@ -851,7 +872,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
                 )
               })}
           </div>
-          {!oclips.some((c) => c.trackId === tr.id) && <div className="empty-hint">Drag a video or image here</div>}
+          {!oclips.some((c) => c.trackId === tr.id) && <div className="empty-hint">Drag a video or image here, or press T for text</div>}
         </div>
       </div>
     )
@@ -981,62 +1002,47 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
   return (
     <div className="timeline" style={height ? { height } : undefined}>
       <div className="tl-toolbar">
-        <button onClick={() => dispatch({ type: 'split', t: state.playhead })} title={'Split at the playhead' + (splitKey ? ' (' + splitKey + ')' : '')}>
-          <Icon name="scissors" /> Split
-        </button>
-        <button onClick={onFreeze} title={'Save the frame under the playhead as an image and insert it (you can then stretch it)' + (freezeKey ? ' (' + freezeKey + ')' : '')}>
-          <Icon name="snowflake" /> Freeze
-        </button>
-        <button disabled={!groupOk} onClick={() => dispatch({ type: 'group' })} title="Group the selected clips so they move together. Detached audio in the selection is attached back to its video.">
-          <Icon name="link" /> Group
-        </button>
-        <button disabled={!ungroupOk} onClick={() => dispatch({ type: 'ungroup' })} title="Break up the selected group. With no group selected: detach the selected audio (or all the audio of a selected video clip) so it can be moved, trimmed or deleted on its own.">
-          <Icon name="unlink" /> Ungroup
-        </button>
-        <button disabled={!state.selection.length} onClick={() => dispatch({ type: 'deleteSelection' })} title="Delete selected (Del)">
-          <Icon name="trash" /> Delete
-        </button>
-        <button disabled={!state.past.length} onClick={() => dispatch({ type: 'undo' })} title="Ctrl+Z">
-          <Icon name="undo" />
-        </button>
-        <button disabled={!state.future.length} onClick={() => dispatch({ type: 'redo' })} title="Ctrl+Y">
-          <Icon name="redo" />
-        </button>
-        <button onClick={() => setShowAdd(true)} title="Add an overlay video track or an audio track">
-          <Icon name="plus" size={13} /> Add track
-        </button>
-        <button onClick={() => dispatch({ type: 'addText', t: state.playhead })} title="Add text or a title at the playhead (T)">
-          <Icon name="type" size={13} /> Text
-        </button>
-        <button onClick={onCaptions} title="Captions from speech: the words in your video become text clips (needs a one-time model download)">
-          <Icon name="captions" size={13} />
-        </button>
-        <button className={'rec-btn' + (rec ? ' on' : '')} disabled={rec && rec.phase === 'saving'} onClick={onRecord} title="Record a voice-over from your microphone while the video plays (R). Use headphones so the microphone does not hear the project's sound.">
-          <Icon name="mic" size={13} />{' '}
-          {!rec ? '' : rec.phase === 'count' ? 'Starting in ' + rec.n + '…' : rec.phase === 'saving' ? 'Saving…' : 'Stop ' + fmtTime((performance.now() - rec.t0) / 1000).slice(0, 5)}
-        </button>
-        <button disabled={!state.selection.length} onClick={onCopy} title="Copy the selected clips (Ctrl+C)"><Icon name="copy" size={13} /></button>
-        <button disabled={!hasClipboard()} onClick={() => dispatch({ type: 'paste', t: state.playhead })} title="Paste at the playhead (Ctrl+V)"><Icon name="paste" size={13} /></button>
-        <button disabled={!state.selection.length} onClick={() => dispatch({ type: 'duplicate' })} title="Duplicate the selected clips (Ctrl+D)"><Icon name="duplicate" size={13} /></button>
-        <button onClick={() => dispatch({ type: 'addMarker', t: state.playhead })} title="Put a marker at the playhead (M)">
-          <Icon name="flag" size={13} />
-        </button>
-        <button className={snapOn ? 'on' : ''} onClick={() => setSnapOn(!snapOn)} title="Snapping: clips and the playhead stick to edges and markers (N)">
-          <Icon name="magnet" size={13} />
-        </button>
-        <button onClick={fit} title="Zoom so the whole project fits (Shift+F)">
-          <Icon name="fit" size={13} />
-        </button>
-        <button className={miniOn ? 'on' : ''} onClick={() => setMiniOn(!miniOn)} title="Show or hide the mini timeline (an overview of the whole project under the timeline)">
-          <Icon name="map" size={13} />
-        </button>
+        <span className="tb-group">
+          <button disabled={!state.past.length} onClick={() => dispatch({ type: 'undo' })} title="Undo (Ctrl+Z)"><Icon name="undo" /></button>
+          <button disabled={!state.future.length} onClick={() => dispatch({ type: 'redo' })} title="Redo (Ctrl+Y)"><Icon name="redo" /></button>
+        </span>
+        <span className="tb-group">
+          <button onClick={() => dispatch({ type: 'split', t: state.playhead })} title={'Split at the playhead' + (splitKey ? ' (' + splitKey + ')' : '')}><Icon name="scissors" /></button>
+          <button onClick={onFreeze} title={'Freeze: save the frame under the playhead as an image and insert it' + (freezeKey ? ' (' + freezeKey + ')' : '')}><Icon name="snowflake" /></button>
+          <button disabled={!state.selection.length} onClick={() => dispatch({ type: 'deleteSelection', keepGap: !rippleOn })} title="Delete selected (Del)"><Icon name="trash" /></button>
+        </span>
+        <span className="tb-group">
+          <button disabled={!state.selection.length} onClick={onCopy} title="Copy the selected clips (Ctrl+C)"><Icon name="copy" size={14} /></button>
+          <button disabled={!hasClipboard()} onClick={() => dispatch({ type: 'paste', t: state.playhead })} title="Paste at the playhead (Ctrl+V). A new track is made if no track has room there."><Icon name="paste" size={14} /></button>
+          <button disabled={!state.selection.length} onClick={() => dispatch({ type: 'duplicate' })} title="Duplicate the selected clips (Ctrl+D)"><Icon name="duplicate" size={14} /></button>
+        </span>
+        <span className="tb-group">
+          <button disabled={!groupOk} onClick={() => dispatch({ type: 'group' })} title="Group the selected clips so they move together. Detached audio in the selection is attached back to its video."><Icon name="link" /></button>
+          <button disabled={!ungroupOk} onClick={() => dispatch({ type: 'ungroup' })} title="Ungroup the selected group. With no group selected: detach the selected audio (or all the audio of a selected video clip) so it can be moved, trimmed or deleted on its own."><Icon name="unlink" /></button>
+        </span>
+        <span className="tb-group">
+          <button onClick={() => dispatch({ type: 'addText', t: state.playhead })} title="Add text or a title at the playhead (T)"><Icon name="type" size={14} /> Text</button>
+          <button onClick={onCaptions} title="Captions from speech: the words in your video become text clips (needs a one-time model download)"><Icon name="captions" size={14} /></button>
+          <button className={'rec-btn' + (rec ? ' on' : '')} disabled={rec && rec.phase === 'saving'} onClick={onRecord} title="Record a voice-over from your microphone while the video plays (R). Use headphones so the microphone does not hear the project's sound.">
+            <Icon name="mic" size={14} />
+            {!rec ? '' : rec.phase === 'count' ? 'Starting in ' + rec.n + '…' : rec.phase === 'saving' ? 'Saving…' : 'Stop ' + fmtTime((performance.now() - rec.t0) / 1000).slice(0, 5)}
+          </button>
+          <button onClick={() => dispatch({ type: 'addMarker', t: state.playhead })} title="Put a marker at the playhead (M)"><Icon name="flag" size={14} /></button>
+        </span>
         <span className="spacer" />
-        <button onClick={onKeybinds} title="Keyboard shortcuts">
-          <Icon name="keyboard" />
-        </button>
-        <label className="zoom" title="Zoom the timeline in and out">
-          <input type="range" min="0" max="100" value={Math.round((100 * Math.log(Math.max(zoom, 0.2) / 0.2)) / Math.log(2000))} onChange={(e) => setZoom(0.2 * Math.pow(2000, +e.target.value / 100))} />
-        </label>
+        <span className="tb-group">
+          <button className={(snapOn ? 'on' : '') + (snapLine != null ? ' snapped' : '')} onClick={() => setSnapOn(!snapOn)} title={'Snapping is ' + (snapOn ? 'on' : 'off') + ': dragged clips stick to clip edges, markers and the playhead, and a line shows where (N)'}><Icon name="magnet" size={14} /></button>
+          <button className={rippleOn ? 'on' : ''} onClick={() => setRippleOn(!rippleOn)} title={'Close gaps is ' + (rippleOn ? 'on: when you delete a clip, the clips after it slide back to fill the space' : 'off: when you delete a clip, the clips after it stay where they are and a gap is left') + ' (G)'}><Icon name="ripple" size={14} /></button>
+          <button className={miniOn ? 'on' : ''} onClick={() => setMiniOn(!miniOn)} title="Show or hide the mini timeline (an overview of the whole project under the timeline)"><Icon name="map" size={14} /></button>
+        </span>
+        <span className="tb-group">
+          <button onClick={() => setShowAdd(true)} title="Add an overlay video track or an audio track"><Icon name="plus" size={14} /> Track</button>
+          <button onClick={fit} title="Zoom so the whole project fits (Shift+F)"><Icon name="fit" size={14} /></button>
+          <label className="zoom" title="Zoom the timeline in and out">
+            <input type="range" min="0" max="100" value={Math.round((100 * Math.log(Math.max(zoom, 0.2) / 0.2)) / Math.log(2000))} onChange={(e) => setZoom(0.2 * Math.pow(2000, +e.target.value / 100))} />
+          </label>
+          <button onClick={onKeybinds} title="Keyboard shortcuts"><Icon name="keyboard" /></button>
+        </span>
       </div>
 
       <div className="tl-scroll" ref={scrollRef} onWheel={onWheel}>
@@ -1082,7 +1088,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
           {state.markers.map((m) => (
             <div key={'ml' + m.id} className="marker-line" style={{ left: LABEL + TRACK_PAD + m.t * zoom }} />
           ))}
-          {snapLine != null && <div className="snap-line" style={{ left: LABEL + TRACK_PAD + snapLine * zoom }} />}
+          {snapLine != null && <div key={snapLine.toFixed(3)} className="snap-line" style={{ left: LABEL + TRACK_PAD + snapLine * zoom }}><span>{fmtTime(snapLine)}</span></div>}
           <div className="playhead" style={{ left: LABEL + TRACK_PAD + Math.min(state.playhead, total + 15) * zoom }} />
           {marquee && (
             <div

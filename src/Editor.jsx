@@ -70,6 +70,21 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
       localStorage.setItem('vibe.snap', v ? '1' : '0')
     } catch {}
   }
+  // deleting a clip: the clips after it slide back (on), or stay where they are and leave a gap (off)
+  const [rippleOn, setRippleOnState] = useState(() => {
+    try {
+      return localStorage.getItem('vibe.ripple') !== '0'
+    } catch {
+      return true
+    }
+  })
+  const setRippleOn = (v) => {
+    setRippleOnState(v)
+    try {
+      localStorage.setItem('vibe.ripple', v ? '1' : '0')
+    } catch {}
+    flash(v ? 'Close gaps on: the clips after a deleted clip slide back.' : 'Close gaps off: a deleted clip leaves a gap.')
+  }
   const [mode, setMode] = useState('transform') // what is drawn over the preview: 'transform' box, 'warp' handles or 'none'
   const [freeMode, setFreeMode] = useState(false) // Free transform: corners stretch instead of resize
   const flag = (key) => {
@@ -250,7 +265,7 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
 
   // let the tab bar ask this project to save (when closing a tab)
   useEffect(() => {
-    registerHandle(tabId, { save: () => saveProject(false), isDirty: () => dirtyRef.current, getState: () => stateRef.current, dispatch })
+    registerHandle(tabId, { save: () => saveProject(false), isDirty: () => dirtyRef.current, getState: () => stateRef.current, dispatch, addMedia })
     return () => registerHandle(tabId, null)
   }, [])
 
@@ -297,7 +312,7 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
         split: () => dispatch({ type: 'split', t: state.playhead }),
         freeze: freezeFrame,
         playPause: () => dispatch({ type: 'setPlaying', value: !state.playing }),
-        delete: () => dispatch({ type: 'deleteSelection' }),
+        delete: () => dispatch({ type: 'deleteSelection', keepGap: !rippleOn }),
         text: () => dispatch({ type: 'addText', t: state.playhead }),
         record: () => startRecording(),
         copy: () => doCopy(),
@@ -305,6 +320,7 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
         duplicate: () => dispatch({ type: 'duplicate' }),
         marker: () => dispatch({ type: 'addMarker', t: state.playhead }),
         snap: () => setSnapOn(!snapOn),
+        ripple: () => setRippleOn(!rippleOn),
         fit: () => fitRef.current && fitRef.current(),
         group: () => dispatch({ type: 'group' }),
         ungroup: () => dispatch({ type: 'ungroup' }),
@@ -321,7 +337,7 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [state.playing, state.playhead, total, binds, showKeys, snapOn])
+  }, [state.playing, state.playhead, total, binds, showKeys, snapOn, rippleOn])
 
   const doCopy = () => {
     const n = copySelection(stateRef.current)
@@ -501,11 +517,15 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
   return (
     <div className="app" ref={appRef} style={{ display: active ? undefined : 'none' }} onDragOver={(e) => e.preventDefault()} onDrop={onDropFiles}>
       <header className="topbar">
-        <button onClick={onNew} title="Start another project in a new tab">New</button>
-        <button onClick={onOpen} title="Open a project in a new tab">Open…</button>
-        <button onClick={() => saveProject(false)}>Save</button>
-        <button onClick={() => saveProject(true)}>Save as…</button>
-        <button onClick={() => setShowHistory(true)} title="Version history: earlier copies of this project"><Icon name="history" size={14} /> History</button>
+        <span className="tb-group">
+          <button onClick={onNew} title="Start another project in a new tab">New</button>
+          <button onClick={onOpen} title="Open a project in a new tab">Open…</button>
+        </span>
+        <span className="tb-group">
+          <button onClick={() => saveProject(false)} title="Save (Ctrl+S)">Save</button>
+          <button onClick={() => saveProject(true)}>Save as…</button>
+          <button onClick={() => setShowHistory(true)} title="Version history: earlier copies of this project"><Icon name="history" size={14} /></button>
+        </span>
         <span className="proj-name">{projectName}{dirty ? ' •' : ''}</span>
         <select className="aspect-select" value={state.aspect} onChange={(e) => dispatch({ type: 'setAspect', aspect: e.target.value })} title="The shape of your video: landscape, vertical (phones), square and more">
           {ASPECTS.map((x) => (
@@ -513,7 +533,7 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
           ))}
         </select>
         <span className="spacer" />
-        <button onClick={() => setTour(true)} title="A short tour of the main features"><Icon name="help" size={14} /> Tutorial</button>
+        <button onClick={() => setTour(true)} title="Tutorial: a short tour of the main features"><Icon name="help" size={15} /></button>
         <button className="primary" onClick={() => onExport()} disabled={!state.clips.length && !state.overlayClips.length}>
           <Icon name="upload" /> Export video…
         </button>
@@ -541,7 +561,7 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
             </span>
           </div>
           <div className="bin-list">
-            {state.media.length === 0 && <div className="hint">Import video, images or audio, or drop files here.</div>}
+            {state.media.length === 0 && <div className="empty-box"><Icon name="film" size={26} /><span>Import video, images or audio, or drop files here.</span></div>}
             {state.media.map((m) => (
               <div
                 key={m.id}
@@ -629,6 +649,8 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
         onFreeze={freezeFrame}
         snapOn={snapOn}
         setSnapOn={setSnapOn}
+        rippleOn={rippleOn}
+        setRippleOn={setRippleOn}
         onCopy={doCopy}
         fitRef={fitRef}
         rec={rec}

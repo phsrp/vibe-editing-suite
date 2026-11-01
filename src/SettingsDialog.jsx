@@ -158,6 +158,76 @@ function StoragePage() {
   )
 }
 
+// ---- Settings > AI connection: lets an AI app on this PC use the editor (MCP)
+function AiPage({ settings, setSettings }) {
+  const [info, setInfo] = useState(null)
+  const [copied, setCopied] = useState('')
+  useEffect(() => {
+    const load = () => window.api.mcpInfo().then(setInfo).catch(() => {})
+    load()
+    const t = setInterval(load, 1500)
+    return () => clearInterval(t)
+  }, [])
+  const copy = async (what, text) => {
+    await navigator.clipboard.writeText(text)
+    setCopied(what)
+    setTimeout(() => setCopied((c) => (c === what ? '' : c)), 1800)
+  }
+  const on = !!settings.mcpEnabled
+  const when = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return (
+    <div className="set-page ai-page">
+      <h4>AI connection</h4>
+      <div className="set-row">
+        <div>
+          <div className="set-title">Let an AI app use the editor</div>
+          <div className="hint left">An AI app on this PC, such as Claude, can read your timeline and make edits while the editor is open. You see every change, and Ctrl+Z takes it back. This uses MCP, an open standard for connecting AI apps to programs.</div>
+        </div>
+        <label className="switch">
+          <input type="checkbox" checked={on} onChange={(e) => setSettings({ mcpEnabled: e.target.checked })} />
+          <span className="slider" />
+        </label>
+      </div>
+      {on && info && (
+        <div className={'ai-status' + (info.running ? ' ok' : ' bad')}>
+          {info.running ? 'On, and waiting for an AI app on this PC.' : info.error ? 'It could not start: ' + info.error : 'Starting…'}
+        </div>
+      )}
+      <h5>Setup guide</h5>
+      <ol className="ai-steps">
+        <li>Turn the switch above on, and keep the editor open while you use the AI app.</li>
+        <li>
+          <b>Claude Desktop:</b> open its Settings, go to Developer, and press Edit Config. Add the text below to that file and save it. If the file already has an "mcpServers" part, add only the "{'vibe-editing-suite'}" entry to it. Then quit Claude Desktop completely and open it again.
+          {info && <div className="ai-code"><pre>{info.desktopConfig}</pre><button className="mini wide" onClick={() => copy('desktop', info.desktopConfig)}>{copied === 'desktop' ? 'Copied' : 'Copy'}</button></div>}
+        </li>
+        <li>
+          <b>Claude Code:</b> run this once in a terminal, then start a new session.
+          {info && <div className="ai-code"><pre>{info.codeCommand}</pre><button className="mini wide" onClick={() => copy('code', info.codeCommand)}>{copied === 'code' ? 'Copied' : 'Copy'}</button></div>}
+        </li>
+        <li><b>Another app that supports MCP:</b> add a local (stdio) server. The command, arguments and environment are the same as in the Claude Desktop text.</li>
+        <li>Open a video project, then ask the AI something like "look at my timeline and add a title at the start".</li>
+      </ol>
+      <h5>Good to know</h5>
+      <ul className="ai-steps">
+        <li>It works on the video project in front. Picture projects are not supported yet.</li>
+        <li>You are always asked first before it deletes clips, adds files or saves. Exporting is yours: it can only open the Export tab.</li>
+        <li>It only accepts connections from this PC, and it stays off until you turn it on.</li>
+        <li>What you ask, and anything the AI reads such as your timeline, transcript or preview pictures, is sent to that AI app's service, under its own rules and your plan with it.</li>
+      </ul>
+      {on && info && info.activity.length > 0 && (
+        <>
+          <h5>What it did last</h5>
+          <div className="ai-log">
+            {info.activity.map((a, i) => (
+              <div key={i}><span>{when(a.at)}</span> {a.tool.replace(/_/g, ' ')} <em>{a.outcome}</em></div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function SettingsDialog({ settings, setSettings, theme, setTheme, themes, saveThemes, onPreviewTheme, version, onCheck, update, onClose }) {
   const [page, setPage] = useState('general')
   const checking = update.state === 'checking'
@@ -182,6 +252,7 @@ export default function SettingsDialog({ settings, setSettings, theme, setTheme,
     { id: 'appearance', label: 'Appearance', icon: 'palette' },
     { id: 'sound', label: 'Sound', icon: 'volume' },
     { id: 'storage', label: 'Storage', icon: 'folder' },
+    { id: 'ai', label: 'AI connection', icon: 'link' },
   ]
 
   return (
@@ -276,6 +347,7 @@ export default function SettingsDialog({ settings, setSettings, theme, setTheme,
             )}
             {page === 'sound' && <SoundPage settings={settings} setSettings={setSettings} />}
             {page === 'storage' && <StoragePage />}
+            {page === 'ai' && <AiPage settings={settings} setSettings={setSettings} />}
           </div>
         </div>
         <div className="modal-foot">

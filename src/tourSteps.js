@@ -5,7 +5,7 @@
 export const VIDEO_STEPS = [
   {
     title: 'Welcome to the video editor',
-    text: 'A one-minute tour of the main things. You can leave it any time, and replay it later with the Tutorial button at the top.',
+    text: 'A one-minute tour of the main things. You can leave it any time, and replay it later with the ? button at the top.',
   },
   {
     target: '.bin .btn-row',
@@ -99,14 +99,14 @@ export const VIDEO_STEPS = [
   },
   {
     title: 'That is the tour',
-    text: 'Have fun. Hovering over almost any button shows what it does. Press the Tutorial button at the top to see this again.',
+    text: 'Have fun. Hovering over almost any button shows what it does. Press the ? button at the top to see this again.',
   },
 ]
 
 export const IMAGE_STEPS = [
   {
     title: 'Welcome to the picture editor',
-    text: 'Edit pictures and paint: layers, brushes with pen pressure, selections, text, masks and effects. A short tour of the main things; leave it any time and replay it with the Tutorial button at the top.',
+    text: 'Edit pictures and paint: layers, brushes with pen pressure, selections, text, masks and effects. A short tour of the main things; leave it any time and replay it with the ? button at the top.',
   },
   {
     target: '.toolbar-v',
@@ -165,6 +165,6 @@ export const IMAGE_STEPS = [
   },
   {
     title: 'That is the tour',
-    text: 'Have fun. Hovering over almost any button shows what it does. Press the Tutorial button at the top to see this again.',
+    text: 'Have fun. Hovering over almost any button shows what it does. Press the ? button at the top to see this again.',
   },
 ]

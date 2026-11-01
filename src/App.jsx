@@ -4,6 +4,7 @@ import ImageEditor from './ImageEditor.jsx'
 import NewProjectDialog from './NewProjectDialog.jsx'
 import { kindOf } from './project.js'
 import Home from './Home.jsx'
+import Tooltip from './Tooltip.jsx'
 import Icon from './Icon.jsx'
 import SettingsDialog from './SettingsDialog.jsx'
 import UpdateDialog from './UpdateDialog.jsx'
@@ -13,6 +14,7 @@ import { cancelExport } from './exporter.js'
 import { loadBinds, saveBinds } from './keybinds.js'
 import { applyTheme, findTheme } from './themes.js'
 import { setDevices } from './audioDevices.js'
+import { runTool } from './mcpTools.js'
 
 let tabCounter = 0
 const newId = () => `p${Date.now().toString(36)}${tabCounter++}`
@@ -199,6 +201,33 @@ export default function App() {
     if (activeId === id) setActiveId(rest.length ? rest[Math.max(0, idx - 1)].id : 'home')
   }
 
+  // the AI connection: what an AI app asks for is done on the video project in front (or the last one that was)
+  const mcpCtx = useRef(null)
+  const lastVideo = useRef(null)
+  const inFront = tabs.find((t) => t.id === activeId) || tabs.find((t) => t.id === (exports.find((x) => x.id === activeId) || colours.find((x) => x.id === activeId) || {}).projectId)
+  if (inFront && inFront.kind === 'video') lastVideo.current = inFront.id
+  mcpCtx.current = {
+    project: () => {
+      const id = inFront && inFront.kind !== 'video' ? null : lastVideo.current
+      return id && handles.current[id] ? { id, handle: handles.current[id] } : null
+    },
+    onImage: () => !!(inFront && inFront.kind === 'image'),
+    newProject: () => newTab(null, 'video'),
+    openExport,
+    focus: setActiveId,
+  }
+  useEffect(
+    () =>
+      window.api.onMcpCall(async ({ id, name, args }) => {
+        try {
+          window.api.mcpResult({ id, result: await runTool(name, args || {}, mcpCtx.current) })
+        } catch (e) {
+          window.api.mcpResult({ id, error: String((e && e.message) || e) })
+        }
+      }),
+    []
+  )
+
   // the window warns on close if any project has unsaved changes
   useEffect(() => {
     window.api.setDirty(tabs.some((t) => t.dirty))
@@ -238,6 +267,7 @@ export default function App() {
 
   return (
     <div className="shell">
+      <Tooltip />
       <div className="tabbar">
         <button className={'tab home-tab' + (activeId === 'home' ? ' on' : '')} onClick={() => setActiveId('home')} title="Home">
           <Icon name="home" /> Home

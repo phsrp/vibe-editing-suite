@@ -319,7 +319,11 @@ function register({ ffmpegPath, getWindow }) {
     return dir
   })
 
-  // Extract the source frames a transition needs, already fitted to the export size.
+  // where the frames of a piece will appear
+  ipcMain.handle('export:extractDir', (_e, name) => path.join(job.dir, name))
+
+  // Extract the source frames a transition needs, already fitted to the export size. Each picture appears under its name only
+  // when it is complete (atomic_writing), because the page reads them while this is still running.
   ipcMain.handle('export:extract', async (_e, o) => {
     const outDir = path.join(job.dir, o.name)
     fs.mkdirSync(outDir, { recursive: true })
@@ -328,7 +332,7 @@ function register({ ffmpegPath, getWindow }) {
     const args = ['-y', '-v', 'error']
     if (o.isImage) args.push('-i', o.file, '-vf', vf, '-frames:v', '1')
     else args.push('-ss', String(o.start), '-t', String(o.dur), '-i', o.file, '-vf', `setpts=PTS/${o.speed || 1},fps=${o.fps},${vf}`, '-frames:v', String(o.maxFrames))
-    args.push('-compression_level', '1', path.join(outDir, '%05d.png'))
+    args.push('-compression_level', '1', '-atomic_writing', '1', path.join(outDir, '%05d.png'))
     await runFfmpeg(ffmpegPath, args)
     const count = fs.readdirSync(outDir).length
     return { dir: outDir, count }
@@ -355,6 +359,7 @@ function register({ ffmpegPath, getWindow }) {
       proc.stdin.on('error', () => {}) // surfaced through the exit code
       proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error(err.trim() || 'segment encode failed'))))
     })
+    done.catch(() => {}) // (a cancelled export kills the encoder; segEnd reports real failures)
     job.seg = { proc, done }
   })
 

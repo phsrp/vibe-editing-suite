@@ -415,7 +415,8 @@ function MotionPanel({ clip, playhead, dispatch, mode, setMode, freeMode, setFre
             <div className="mtop">
               <span className="mlabel">{p.label}</span>
               <span className="kfctl">
-                {list.length > 0 && <button className="mini" onClick={() => dispatch({ type: 'clearProp', id: clip.id, prop: p.id })} title="Remove this property's keyframes and reset it">Reset</button>}
+                {list.length > 0 && <button className="mini" disabled={!inside} onClick={() => { dispatch({ type: 'checkpoint' }); dispatch({ type: 'setProp', id: clip.id, prop: p.id, value: p.def, t: ts }) }} title={'Back to the original value (' + p.def + p.unit + ') at the playhead. Your other keyframes stay.'}>Reset</button>}
+                {list.length > 0 && <button className="mini" onClick={() => dispatch({ type: 'clearProp', id: clip.id, prop: p.id })} title={'Remove all the keyframes of ' + p.label + ' on this clip'}><Icon name="trash" size={11} /></button>}
                 <button
                   className={'mini kf-btn' + (kf ? ' on' : '')}
                   onClick={() => dispatch({ type: 'toggleKey', id: clip.id, prop: p.id, t: ts })}
@@ -719,7 +720,7 @@ export default function Inspector({ state, dispatch, transitions, errors, onRelo
       <div className="insp-body">
         {!clip && <LabelRow state={state} dispatch={dispatch} />}
         {state.selection.length === 0 && (
-          <div className="hint">Select a clip on the timeline to edit it or give it a transition from the previous clip. Drag a box around items to select several.</div>
+          <div className="empty-box plain"><Icon name="sliders" size={26} /><span>Select a clip on the timeline to edit it. Drag a box around clips to select several.</span></div>
         )}
         {state.selection.length > 1 && !clip && !allAudio && <div className="hint">{state.selection.length} items selected. Use the timeline toolbar to Group, Ungroup or Delete them.</div>}
         {!clip && (state.selection.length === 1 || allAudio) && <AudioPanel state={state} dispatch={dispatch} />}
@@ -757,7 +758,7 @@ export default function Inspector({ state, dispatch, transitions, errors, onRelo
               <>
                 <MotionPanel clip={clip} playhead={state.playhead} dispatch={dispatch} mode={mode} setMode={setMode} freeMode={freeMode} setFreeMode={setFreeMode} fill={fillScale} />
                 {media && media.type === 'video' && <SpeedPanel clip={clip} dispatch={dispatch} />}
-                {oclip && <div className="hint left">This clip is on an overlay track. Drag it along its track to choose when it appears; transitions only work on the main video track.</div>}
+                {oclip && <div className="hint left">Drag this clip along its track to choose when it appears. Transitions only work on {state.mainName}.</div>}
                 <LabelRow state={state} dispatch={dispatch} />
               </>
             )}

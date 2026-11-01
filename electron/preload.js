@@ -11,7 +11,15 @@ contextBridge.exposeInMainWorld('api', {
   readProject: (file) => ipcRenderer.invoke('project:read', file),
   recentList: () => ipcRenderer.invoke('recent:list'),
   recentAdd: (entry) => ipcRenderer.invoke('recent:add', entry),
+  recentRepair: () => ipcRenderer.invoke('recent:repair'),
   recentRemove: (file) => ipcRenderer.invoke('recent:remove', file),
+  mcpInfo: () => ipcRenderer.invoke('mcp:info'),
+  mcpResult: (r) => ipcRenderer.send('mcp:result', r),
+  onMcpCall: (cb) => {
+    const h = (_e, d) => cb(d)
+    ipcRenderer.on('mcp:call', h)
+    return () => ipcRenderer.removeListener('mcp:call', h)
+  },
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (patch) => ipcRenderer.invoke('settings:set', patch),
   downloadUpdate: () => ipcRenderer.invoke('update:download'),
@@ -23,6 +31,7 @@ contextBridge.exposeInMainWorld('api', {
   exportChooseOutput: (name, ext) => ipcRenderer.invoke('export:chooseOutput', name, ext),
   exportEncoders: () => ipcRenderer.invoke('export:encoders'),
   exportBegin: () => ipcRenderer.invoke('export:begin'),
+  exportExtractDir: (name) => ipcRenderer.invoke('export:extractDir', name),
   exportExtract: (o) => ipcRenderer.invoke('export:extract', o),
   exportSegBegin: (o) => ipcRenderer.invoke('export:segBegin', o),
   exportFrame: (buf) => ipcRenderer.invoke('export:frame', buf),

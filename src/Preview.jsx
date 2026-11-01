@@ -334,8 +334,8 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
         const cB = act.length > 1 ? act[1] : null
         const mA = mediaOf(cA)
         const mB = cB && mediaOf(cB)
-        const A = mA ? syncClip(cA, t, s.playing, mA) : null
-        const B = cB && mB ? syncClip(cB, t, s.playing, mB) : null
+        const A = cA.text ? textLayer(cA, t) : mA ? syncClip(cA, t, s.playing, mA) : null
+        const B = cB && cB.text ? textLayer(cB, t) : cB && mB ? syncClip(cB, t, s.playing, mB) : null
         // each clip's motion (position / scale / rotation / opacity) and warp at this moment
         if (A) {
           A.tf = evalTransform(cA, motionAt(cA))

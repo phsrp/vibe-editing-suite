@@ -25,11 +25,21 @@ A Windows video editor and picture editor focused on simplicity with many featur
 
 <div align="center">
 
+## Connect an AI app (MCP)
+
+An AI app on your PC, such as Claude, can read your timeline and edit it for you while the editor is open. It uses [MCP](https://modelcontextprotocol.io), an open standard for connecting AI apps to programs. It is off until you turn it on.
+
+1. Open **Settings > AI connection** and turn the switch on.
+2. Copy the text from the setup guide on that page into your AI app. For Claude Desktop that is Settings > Developer > Edit Config, then restart it. For Claude Code it is one command.
+3. Open a video project and ask something like "look at my timeline and add a title at the start".
+
+You see every change as it happens, and Ctrl+Z takes it back. You are asked first before it deletes clips, adds files or saves, and it can only open the Export tab, not start an export. It works with video projects for now.
+
 ## Tutorial included, don't worry
 
 *(for new users: there is an included tutorial, do not worry)*
 
-The first time you open the video editor or the picture editor, a short tour shows you the key features, one step at a time. You can skip it, and replay it any time with the **Tutorial** button at the top.
+The first time you open the video editor or the picture editor, a short tour shows you the key features, one step at a time. You can skip it, and replay it any time with the **?** button at the top.
 
 <img src="docs/screenshots/tutorial-video.png" alt="The tutorial in the video editor, explaining Transform and Funny warp" width="48%"> <img src="docs/screenshots/tutorial-image.png" alt="The tutorial in the image editor, explaining Transform and Funny warp" width="48%">
 

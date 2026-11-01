@@ -17,6 +17,7 @@ const PATHS = {
   flag: (<><path d="M5 22V4" /><path d="M5 4h12l-2 4 2 4H5" /></>),
   magnet: (<><path d="M6 15V4h4v11a2 2 0 0 0 4 0V4h4v11a6 6 0 0 1-12 0Z" /><path d="M6 8h4M14 8h4" /></>),
   fit: (<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />),
+  ripple: (<><path d="M12 4v16" /><path d="M3 12h6M21 12h-6" /><path d="m6 9 3 3-3 3M18 9l-3 3 3 3" /></>),
   copy: (<><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h8" /></>),
   paste: (<><rect x="5" y="5" width="14" height="16" rx="2" /><path d="M9 5V3h6v2M9 12h6M9 16h6" /></>),
   duplicate: (<><rect x="8" y="8" width="13" height="13" rx="2" /><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3" /></>),

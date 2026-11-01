@@ -727,10 +727,71 @@ const readRecent = () => {
     return []
   }
 }
-ipcMain.handle('recent:list', () => readRecent().filter((r) => fs.existsSync(r.path)).slice(0, 24))
+// The pictures of Recent projects live in their own folder, so they survive when the cache of thumbnails is cleared
+const projectThumbFile = (project, ext = '.jpg') => {
+  const dir = path.join(app.getPath('userData'), 'thumbs')
+  fs.mkdirSync(dir, { recursive: true })
+  return path.join(dir, crypto.createHash('sha1').update(String(project)).digest('hex').slice(0, 16) + ext)
+}
+// makes a project's picture again from what is in the project: a frame of its first clip, or its first picture or layer
+async function rebuildThumb(project) {
+  const small = ['-vf', "scale='min(480,iw)':-2", '-frames:v', '1']
+  const jpg = projectThumbFile(project)
+  const png = projectThumbFile(project, '.png')
+  for (const f of [jpg, png]) if (fs.existsSync(f)) return f
+  let d
+  try {
+    d = JSON.parse(fixOldPaths(fs.readFileSync(project, 'utf8')))
+  } catch {
+    return null
+  }
+  for (const c of [...(d.clips || []), ...(d.overlayClips || [])]) {
+    const m = (d.media || []).find((x) => x.id === c.mediaId)
+    if (!m || m.type === 'audio' || !fs.existsSync(m.path)) continue
+    const seek = m.type === 'video' ? c.in + Math.min(1, (c.out - c.in) * 0.1) : 0
+    try {
+      await run(ffmpegPath, ['-y', '-ss', String(seek), '-i', m.path, ...small, jpg])
+      if (fs.existsSync(jpg)) return jpg
+    } catch {}
+  }
+  // pixel layers are inside the project file
+  const layers = [...Object.values(d.rasters || {}), ...(d.layers || []).map((l) => l.png).filter(Boolean)]
+  for (const data of layers) {
+    const tmp = png + '.tmp.png'
+    try {
+      fs.writeFileSync(tmp, Buffer.from(String(data).replace(/^data:[^,]*,/, ''), 'base64'))
+      await run(ffmpegPath, ['-y', '-i', tmp, ...small, png])
+      fs.rmSync(tmp, { force: true })
+      if (fs.existsSync(png)) return png
+    } catch {
+      fs.rmSync(tmp, { force: true })
+    }
+  }
+  return null
+}
+const recentNow = () =>
+  readRecent()
+    .filter((r) => fs.existsSync(r.path))
+    .slice(0, 24)
+    .map((r) => (r.thumb && !fs.existsSync(r.thumb) ? { ...r, thumb: null } : r))
+ipcMain.handle('recent:list', () => recentNow())
+ipcMain.handle('recent:repair', async () => {
+  const fixed = new Map()
+  for (const r of recentNow()) if (!r.thumb) fixed.set(r.path, await rebuildThumb(r.path))
+  const list = readRecent().map((r) => (fixed.get(r.path) ? { ...r, thumb: fixed.get(r.path) } : r))
+  fs.writeFileSync(recentPath(), JSON.stringify(list), 'utf8')
+  return recentNow()
+})
 ipcMain.handle('recent:add', (_e, entry) => {
   const list = readRecent().filter((r) => r.path !== entry.path)
-  list.unshift({ ...entry, modified: entry.modified || Date.now() })
+  // a video's thumbnail is in the cache: keep a copy of its own
+  let thumb = entry.thumb
+  if (thumb && thumb.startsWith(cacheDir()) && fs.existsSync(thumb)) {
+    const keep = projectThumbFile(entry.path)
+    fs.copyFileSync(thumb, keep)
+    thumb = keep
+  }
+  list.unshift({ ...entry, thumb, modified: entry.modified || Date.now() })
   fs.writeFileSync(recentPath(), JSON.stringify(list.slice(0, 50)), 'utf8')
 })
 ipcMain.handle('recent:remove', (_e, file) => {
@@ -753,6 +814,7 @@ ipcMain.handle('settings:set', (_e, patch) => {
   fs.writeFileSync(settingsPath(), JSON.stringify(next), 'utf8')
   applyUpdateSchedule()
   applyPresence()
+  mcp.sync(!!next.mcpEnabled)
   return next
 })
 
@@ -789,6 +851,10 @@ ipcMain.handle('ui:askSave', (_e, name) =>
 ipcMain.handle('app:isTest', () => !!process.env.VIBE_SELFTEST)
 
 require('./exporter').register({ ffmpegPath, getWindow: () => mainWindow })
+// the AI connection (Settings > AI connection): off unless it was turned on
+const mcp = require('./mcp.js')
+mcp.register({ getWindow: () => mainWindow })
+app.whenReady().then(() => mcp.sync(!!readSettings().mcpEnabled))
 
 // ---- updates (installed app only). New versions are published as GitHub Releases.
 // Nothing is downloaded until the user says so. With "automatic updates" on (the default) the app

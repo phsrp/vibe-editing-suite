@@ -11,6 +11,7 @@ export const ACTIONS = [
   { id: 'duplicate', label: 'Duplicate selected clips', def: 'Ctrl+D' },
   { id: 'marker', label: 'Put a marker at the playhead', def: 'M' },
   { id: 'snap', label: 'Turn snapping on / off', def: 'N' },
+  { id: 'ripple', label: 'Close gaps after deleting: on / off', def: 'G' },
   { id: 'fit', label: 'Zoom to fit the whole project', def: 'Shift+F' },
   { id: 'freeze', label: 'Freeze frame at playhead', def: 'F' },
   { id: 'group', label: 'Group selected', def: 'Ctrl+G' },

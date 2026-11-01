@@ -19,7 +19,12 @@ const len = (s) => {
 
 export default function Home({ active, onNew, onOpen, onOpenPicture, onOpenRecent }) {
   const [recents, setRecents] = useState(null)
-  const load = () => window.api.recentList().then(setRecents)
+  const load = async () => {
+    const list = await window.api.recentList()
+    setRecents(list)
+    // a project whose picture is gone (or never had one) gets a new one made from its files
+    if (list.some((r) => !r.thumb)) window.api.recentRepair().then(setRecents)
+  }
   useEffect(() => {
     if (active) load()
   }, [active])

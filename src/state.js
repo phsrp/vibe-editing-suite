@@ -390,6 +390,13 @@ function ensureTracks(state) {
   return out
 }
 
+// tracks that were made for a clip go away when undo leaves them empty
+function pruneAuto(state) {
+  const videoTracks = state.videoTracks.filter((t) => !t.auto || state.overlayClips.some((c) => c.trackId === t.id))
+  const audioTracks = state.audioTracks.filter((t) => !t.auto || state.audioClips.some((c) => c.trackId === t.id))
+  return videoTracks.length === state.videoTracks.length && audioTracks.length === state.audioTracks.length ? state : { ...state, videoTracks, audioTracks }
+}
+
 // "Video 2", "Video 3"...: the first number not used yet ("Video 1" is the main track)
 function nextVideoName(tracks, mainName = 'Video 1') {
   const used = new Set([mainName, ...tracks.map((t) => t.name)])
@@ -443,7 +450,7 @@ const stripDerived = (c) => {
 export function cloneSelection(state, ids) {
   const set = new Set(ids.filter((x) => !x.startsWith('sa:')))
   return {
-    main: layout(state.clips).filter((c) => set.has(c.id)).map(stripDerived),
+    main: layout(state.clips).filter((c) => set.has(c.id)).map((c) => ({ ...stripDerived(c), at: c.start })),
     over: overlayLayout(state.overlayClips).filter((c) => set.has(c.id)).map((c) => ({ ...stripDerived(c), start: c.start })),
     aud: audioLayout(state.audioClips).filter((c) => set.has(c.id)).map((c) => ({ ...stripDerived(c), start: c.start })),
   }
@@ -457,8 +464,80 @@ export function copySelection(state) {
 }
 export const hasClipboard = () => !!clipboard
 
-// Puts copies of the clipboard clips into the project. t = where (seconds), or null to put each copy right after
-// the originals (duplicate). New ids, groups are kept as groups.
+// ---- where a new clip can go
+const spanFree = (list, s, e) => !list.some((x) => s < x.start + lenOf(x) - 1e-6 && e > x.start + 1e-6)
+const usableRow = (state, key) => !(state.lockedRows || []).includes(key) && !(state.hiddenRows || []).includes(key)
+
+// Is there room for len seconds at time t on the main track? After its last clip there always is (a gap fills the time in
+// between), and inside a gap there is when it is long enough. Returns {index, gap, next} or null.
+function mainSlot(state, t, len) {
+  if (!usableRow(state, 'main')) return null
+  const lay = layout(state.clips)
+  const last = lay[lay.length - 1]
+  const end = last ? last.start + last.dur : 0
+  if (t >= end - 1e-6) return { index: lay.length, gap: Math.max(0, t - end), next: null }
+  for (let i = 0; i < lay.length; i++) {
+    const c = lay[i]
+    if (!(c.gap > 0)) continue
+    const g0 = c.start - c.gap
+    if (t >= g0 - 1e-6 && t + len <= c.start + 1e-6) return { index: i, gap: Math.max(0, t - g0), next: { id: c.id, gap: Math.max(0, c.start - t - len) } }
+  }
+  return null
+}
+// the main track with these clips put into a mainSlot (the clips after them stay where they are in time)
+function placeMain(state, slot, items) {
+  const clips = state.clips.map((c) => (slot.next && c.id === slot.next.id ? { ...c, gap: slot.next.gap } : c))
+  clips.splice(slot.index, 0, ...items.map((c, i) => ({ ...c, gap: i === 0 ? slot.gap : 0, transition: i === 0 ? null : c.transition })))
+  return clips
+}
+
+// Finds tracks for new clips: a track that is free at that time if there is one, and a new one only when there is none.
+// Tracks made here are marked auto: they go away again if undo leaves them empty.
+function trackPlacer(state) {
+  let videoTracks = state.videoTracks
+  let audioTracks = state.audioTracks
+  let rowOrder = state.rowOrder
+  const v = []
+  const a = []
+  const cur = () => ({ ...state, videoTracks, audioTracks, rowOrder })
+  const fits = (list, spans) => spans.every(([s, e]) => spanFree(list, s, e))
+  const onVideo = (id) => [...state.overlayClips, ...v].filter((x) => x.trackId === id)
+  const onAudio = (id) => [...state.audioClips, ...a].filter((x) => x.trackId === id)
+  // an existing video track with room, top one first (prefer = try this one first). null = none.
+  const videoFree = (spans, prefer) => {
+    const okV = (id) => usableRow(state, 'v:' + id) && fits(onVideo(id), spans)
+    if (prefer && videoTracks.some((t) => t.id === prefer) && okV(prefer)) return prefer
+    const ids = rowKeys(cur()).filter((k) => k.startsWith('v:')).map((k) => k.slice(2))
+    return ids.find((id) => videoTracks.find((t) => t.id === id).name !== 'Captions' && okV(id)) || null
+  }
+  const video = (spans, prefer, newId) => {
+    const hit = videoFree(spans, prefer)
+    if (hit) return hit
+    const id = newId || uid()
+    rowOrder = ['v:' + id, ...rowKeys(cur())]
+    videoTracks = [...videoTracks, { id, name: nextVideoName(videoTracks, state.mainName), auto: true }]
+    return id
+  }
+  const audio = (s, e, prefer) => {
+    const okA = (id) => usableRow(state, 'a:' + id) && fits(onAudio(id), [[s, e]])
+    if (prefer && audioTracks.some((t) => t.id === prefer) && okA(prefer)) return prefer
+    if (prefer && prefer.startsWith('ug') && !audioTracks.some((t) => t.id === prefer)) {
+      audioTracks = [...audioTracks, { id: prefer, name: `Video audio ${+prefer.slice(2) + 1} (detached)`, kind: 'free', volume: 1, mute: false, auto: true }]
+      return prefer
+    }
+    const hit = audioTracks.find((t) => okA(t.id))
+    if (hit) return hit.id
+    const id = uid()
+    audioTracks = [...audioTracks, { id, name: nextAudioName(audioTracks), kind: 'free', volume: 1, mute: false, auto: true }]
+    return id
+  }
+  return { videoFree, video, audio, v, a, tracks: () => ({ videoTracks, audioTracks, rowOrder }) }
+}
+
+// Puts copies of the clipboard clips into the project. t = where (seconds), or null to put each copy right after the originals
+// (duplicate). New ids, groups are kept as groups. Pasted clips start at t, on a track that has room there: the main track
+// after its last clip or in a gap, otherwise a free video track, otherwise a new one (a main clip's sound comes along as
+// detached audio grouped with it, like when a clip is dragged up to a video track).
 function pasteItems(state, cb, t) {
   const gmap = new Map()
   const gid = (g) => {
@@ -472,33 +551,59 @@ function pasteItems(state, cb, t) {
     idmap.set(c.id, id)
     return { ...c, id, groupId: gid(c.groupId) }
   }
-  // main track: the copies go after the last original (duplicate) or at the playhead
-  const lay = layout(state.clips)
-  let at
-  if (t == null) {
-    const last = Math.max(-1, ...cb.main.map((c) => lay.findIndex((x) => x.id === c.id)))
-    at = last + 1
-  } else {
-    at = lay.filter((c) => c.start + c.dur / 2 < t).length
-  }
-  const mainCopies = cb.main.map((c, i) => ({ ...fresh(c), transition: i === 0 ? null : c.transition }))
-  const clips = [...state.clips.slice(0, at), ...mainCopies, ...state.clips.slice(at)]
-  // overlay and audio: same tracks, shifted in time
+  const noAt = ({ at, ...c }) => c
+  const p = trackPlacer(state)
   const timed = [...cb.over, ...cb.aud]
   let offset = 0
-  if (timed.length) {
-    const base = Math.min(...timed.map((c) => c.start))
-    if (t == null) offset = Math.max(...timed.map((c) => c.start + lenOf(c))) - base
-    else offset = t - base
+  if (t != null) offset = t - Math.min(...cb.main.map((c) => c.at), ...timed.map((c) => c.start))
+  else if (timed.length) offset = Math.max(...timed.map((c) => c.start + lenOf(c))) - Math.min(...timed.map((c) => c.start))
+
+  let clips = state.clips
+  const mainCopies = []
+  if (cb.main.length && t == null) {
+    // duplicate: right after the last original
+    const lay = layout(state.clips)
+    const at = Math.max(-1, ...cb.main.map((c) => lay.findIndex((x) => x.id === c.id))) + 1
+    mainCopies.push(...cb.main.map((c, i) => ({ ...fresh(noAt(c)), transition: i === 0 ? null : c.transition })))
+    clips = [...state.clips.slice(0, at), ...mainCopies, ...state.clips.slice(at)]
+  } else if (cb.main.length) {
+    const first = Math.min(...cb.main.map((c) => c.at)) + offset
+    const slot = mainSlot(state, first, cb.main.reduce((sum, c) => sum + lenOf(c), 0))
+    if (slot) {
+      mainCopies.push(...cb.main.map((c) => fresh(noAt(c))))
+      clips = placeMain(state, slot, mainCopies)
+    } else {
+      const trackId = p.video(cb.main.map((c) => [c.at + offset, c.at + offset + lenOf(c)]))
+      for (const c of cb.main) {
+        const start = c.at + offset
+        const m = state.media.find((x) => x.id === c.mediaId)
+        const streams = ((m && m.audioStreams) || []).map((_, n) => n).filter((n) => hasAttached(c, m, n))
+        const { transition, noAudio, gap, ...keep } = fresh(noAt(c))
+        const clip = { ...keep, trackId, start, groupId: keep.groupId || (streams.length ? uid() : undefined) }
+        p.v.push(clip)
+        for (const n of streams) {
+          const tid = p.audio(start, start + (c.out - c.in), 'ug' + n)
+          p.a.push({ id: uid(), mediaId: c.mediaId, stream: n, trackId: tid, in: c.in, out: c.out, start, origin: clip.id, groupId: clip.groupId, ...avFields(c, n) })
+        }
+      }
+    }
   }
-  const overCopies = cb.over.map((c) => ({ ...fresh(c), start: Math.max(0, c.start + offset) }))
-  const audCopies = cb.aud.map((c) => {
-    const n = fresh(c)
-    return { ...n, start: Math.max(0, c.start + offset), origin: c.origin && idmap.has(c.origin) ? idmap.get(c.origin) : undefined }
-  })
+  // clips of the other video tracks: each track's clips stay together, on their own track if it has room
+  for (const tid of [...new Set(cb.over.map((c) => c.trackId))]) {
+    const list = cb.over.filter((c) => c.trackId === tid)
+    const start = (c) => Math.max(0, c.start + offset)
+    const trackId = p.video(list.map((c) => [start(c), start(c) + lenOf(c)]), tid)
+    for (const c of list) p.v.push({ ...fresh(c), trackId, start: start(c) })
+  }
+  for (const c of cb.aud) {
+    const start = Math.max(0, c.start + offset)
+    const trackId = p.audio(start, start + lenOf(c), c.trackId)
+    p.a.push({ ...fresh(c), trackId, start, origin: c.origin && idmap.has(c.origin) ? idmap.get(c.origin) : undefined })
+  }
   const out = {
-    ...commit(state, { clips, overlayClips: [...state.overlayClips, ...overCopies], audioClips: [...state.audioClips, ...audCopies] }),
-    selection: [...mainCopies, ...overCopies, ...audCopies].map((c) => c.id),
+    ...commit(state, { clips, overlayClips: [...state.overlayClips, ...p.v], audioClips: [...state.audioClips, ...p.a] }),
+    ...p.tracks(),
+    selection: [...mainCopies, ...p.v, ...p.a].map((c) => c.id),
   }
   return ensureTracks(out)
 }
@@ -612,7 +717,7 @@ export function reducer(state, a) {
       const clips = state.clips.map((c) => {
         if (c.id !== a.id) return c
         const m = state.media.find((x) => x.id === c.mediaId)
-        const maxOut = m.type === 'video' ? m.duration : 3600
+        const maxOut = m && m.type === 'video' ? m.duration : 3600 // (text and pictures can be as long as you like)
         if (a.side === 'in') return { ...c, in: Math.max(0, Math.min(a.value, c.out - MIN_CLIP)) }
         return { ...c, out: Math.max(c.in + MIN_CLIP, Math.min(a.value, maxOut)) }
       })
@@ -708,10 +813,23 @@ export function reducer(state, a) {
         const [, cid, n] = id.split(':')
         gone.set(cid, [...(gone.get(cid) || []), +n])
       }
-      const clips = state.clips
+      let clips = state.clips
         .filter((c) => !sel.has(c.id))
         .map((c) => (gone.has(c.id) ? { ...c, noAudio: [...new Set([...(c.noAudio || []), ...gone.get(c.id)])] } : c))
-      const audioClips = state.audioClips.filter((c) => !sel.has(c.id))
+      const before = layout(state.clips)
+      if (a.keepGap) {
+        // the clips after a deleted one stay where they are: its place becomes a gap
+        let end = 0
+        clips = clips.map((c) => {
+          const b = before.find((x) => x.id === c.id)
+          const i = before.indexOf(b)
+          const gap = i > 0 && sel.has(before[i - 1].id) ? Math.max(0, b.start - end) : c.gap
+          end = b.start + b.dur
+          return gap === c.gap ? c : { ...c, gap }
+        })
+      }
+      // sound that is grouped with a clip stays with it when the clips close up
+      const audioClips = shiftGroupAudio(state.audioClips.filter((c) => !sel.has(c.id)), before, layout(clips))
       const overlayClips = state.overlayClips.filter((c) => !sel.has(c.id))
       return { ...commit(state, { clips, audioClips, overlayClips }), selection: [] }
     }
@@ -1081,11 +1199,11 @@ export function reducer(state, a) {
       const before = layout(state.clips)
       const c = before.find((x) => x.id === a.id)
       const m = c && state.media.find((x) => x.id === c.mediaId)
-      if (!c || !m || !state.videoTracks.some((t) => t.id === a.trackId)) return state
+      if (!c || (!m && !c.text) || !state.videoTracks.some((t) => t.id === a.trackId)) return state
       const start = Math.max(0, a.start || 0)
-      const streams = (m.audioStreams || []).map((_, n) => n).filter((n) => hasAttached(c, m, n))
+      const streams = ((m && m.audioStreams) || []).map((_, n) => n).filter((n) => hasAttached(c, m, n))
       const gid = c.groupId || (streams.length ? uid() : undefined)
-      const { dur, ov, transition, noAudio, ...keep } = c
+      const { dur, ov, gap, transition, noAudio, ...keep } = c
       const clip = { ...keep, trackId: a.trackId, start, groupId: gid }
       const clips = state.clips.filter((x) => x.id !== c.id)
       const tracks = [...state.audioTracks]
@@ -1112,8 +1230,8 @@ export function reducer(state, a) {
     // An overlay clip goes onto the main video track at index a.toIndex. Its sound goes back to being attached.
     case 'overlayToMain': {
       const c = state.overlayClips.find((x) => x.id === a.id)
-      const m = c && !c.text && state.media.find((x) => x.id === c.mediaId)
-      if (!c || !m) return state
+      const m = c && state.media.find((x) => x.id === c.mediaId)
+      if (!c || (!m && !c.text)) return state
       const before = layout(state.clips)
       const { trackId, start, ...keep } = c
       const own = state.audioClips.filter((x) => x.origin === c.id)
@@ -1122,7 +1240,9 @@ export function reducer(state, a) {
       const shares = !!c.groupId && [...state.clips, ...state.overlayClips.filter((x) => x.id !== c.id), ...state.audioClips.filter((x) => !gone.has(x.id))].some((x) => x.groupId === c.groupId)
       const clip = { ...keep, transition: null, noAudio: [], groupId: shares ? c.groupId : undefined }
       const idx = clamp(a.toIndex, 0, state.clips.length)
-      const clips = [...state.clips.slice(0, idx), clip, ...state.clips.slice(idx)]
+      // dropped on empty time it stays where it was dropped; otherwise it goes between the clips
+      const slot = a.start != null ? mainSlot(state, a.start, lenOf(c)) : null
+      const clips = slot ? placeMain(state, slot, [clip]) : [...state.clips.slice(0, idx), clip, ...state.clips.slice(idx)]
       const after = layout(clips)
       const delta = new Map()
       for (const x of after) {
@@ -1155,19 +1275,20 @@ export function reducer(state, a) {
     }
 
     // ---- titles and text: a clip on a video track whose picture is drawn from text (see textRender.js)
+    // A text clip is a video clip like any other: it goes on a video track that has room at that time, or on the main
+    // track if there is room there, and a new video track is only made when no track has room.
     case 'addText': {
-      let videoTracks = state.videoTracks
-      let rowOrder = state.rowOrder
-      let tr = videoTracks.find((x) => /^Text/.test(x.name))
-      if (!tr) {
-        tr = { id: a.trackId || uid(), name: 'Text 1' }
-        videoTracks = [...videoTracks, tr]
-        rowOrder = ['v:' + tr.id, ...rowKeys(state)]
-      }
-      const text = { ...TEXT_DEFAULTS, ...(a.text || {}) }
-      const clip = { id: a.id || uid(), mediaId: null, trackId: tr.id, in: 0, out: a.dur || 3, start: Math.max(0, a.t || 0), text }
+      const start = Math.max(0, a.t || 0)
+      const dur = a.dur || 3
+      const clip = { id: a.id || uid(), mediaId: null, in: 0, out: dur, text: { ...TEXT_DEFAULTS, ...(a.text || {}) } }
       if (a.y) clip.tf = { ...DEFAULTS, y: a.y }
-      return { ...commit(state, { overlayClips: [...state.overlayClips, clip] }), videoTracks, rowOrder, selection: [clip.id] }
+      const p = trackPlacer(state)
+      if (!p.videoFree([[start, start + dur]])) {
+        const slot = mainSlot(state, start, dur)
+        if (slot) return { ...commit(state, { clips: placeMain(state, slot, [{ ...clip, transition: null, noAudio: [] }]) }), selection: [clip.id] }
+      }
+      const trackId = p.video([[start, start + dur]], null, a.trackId)
+      return { ...commit(state, { overlayClips: [...state.overlayClips, { ...clip, trackId, start }] }), ...p.tracks(), selection: [clip.id] }
     }
     // Captions made from speech: one text clip per caption, on a track called "Captions" (made if needed).
     // items = [{start, dur, text}] in timeline seconds; style = one of TEXT_PRESETS ({text, y}); replace = remove the earlier captions first
@@ -1196,7 +1317,7 @@ export function reducer(state, a) {
         for (const [k, v] of Object.entries(a.patch)) text[k] = v && typeof v === 'object' && !Array.isArray(v) ? { ...(text[k] || {}), ...v } : v
         return { ...c, text }
       }
-      return a.live ? { ...state, overlayClips: state.overlayClips.map(f) } : commit(state, { overlayClips: state.overlayClips.map(f) })
+      return a.live ? { ...state, ...mapClips(state, f) } : commit(state, mapClips(state, f))
     }
     // a look from TEXT_PRESETS: the text style and the position
     case 'applyTextPreset': {
@@ -1205,7 +1326,7 @@ export function reducer(state, a) {
         const text = { ...TEXT_DEFAULTS, content: c.text.content, ...a.text }
         return { ...c, text, tf: { ...DEFAULTS, ...c.tf, y: a.y || 0 } }
       }
-      return commit(state, { overlayClips: state.overlayClips.map(f) })
+      return commit(state, mapClips(state, f))
     }
     // ---- masks (see masks.js). patch = {shape: 'ellipse'} / {feather: 20} / {pts: [...]}; live = while dragging
     case 'setMask': {
@@ -1599,12 +1720,12 @@ export function reducer(state, a) {
     case 'undo': {
       if (!state.past.length) return state
       const prev = state.past[state.past.length - 1]
-      return ensureTracks({ ...state, ...prev, past: state.past.slice(0, -1), future: [snap(state), ...state.future] })
+      return ensureTracks(pruneAuto({ ...state, ...prev, past: state.past.slice(0, -1), future: [snap(state), ...state.future] }))
     }
     case 'redo': {
       if (!state.future.length) return state
       const next = state.future[0]
-      return ensureTracks({ ...state, ...next, past: [...state.past, snap(state)], future: state.future.slice(1) })
+      return ensureTracks(pruneAuto({ ...state, ...next, past: [...state.past, snap(state)], future: state.future.slice(1) }))
     }
     default:
       return state

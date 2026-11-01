@@ -1,10 +1,32 @@
 // Video export, renderer side. See electron/exporter.js for the overall approach.
 import { drawText, loadFont } from './textRender.js'
 import { aspectRatio } from './state.js'
-import { speedOf, srcAt, layout, overlayLayout, totalDuration, projectDuration, videoRowsBottomUp, hasAttached, streamCount, toUrl, streamAudioOf, audioClipVol, cleanActive } from './state.js'
+import { speedOf, srcAt, tlOf, layout, overlayLayout, totalDuration, projectDuration, videoRowsBottomUp, hasAttached, streamCount, toUrl, streamAudioOf, audioClipVol, cleanActive } from './state.js'
 import { createRenderer } from './glRenderer.js'
-import { evalTransform, evalWarp, hasTransform } from './motion.js'
+import { evalTransform, evalWarp, hasTransform, keyTimes, PROPS } from './motion.js'
 import { maskAt } from './masks.js'
+import DecodeWorker from './exportDecode.worker.js?worker&inline'
+
+// asks a worker for a picture; resolves with an ImageBitmap, or null if the file is not there (yet)
+let workers = null
+let nextJob = 0
+const waiting = new Map()
+function decodeFrame(url) {
+  if (!workers) {
+    workers = [new DecodeWorker(), new DecodeWorker(), new DecodeWorker()]
+    for (const w of workers)
+      w.onmessage = (e) => {
+        const done = waiting.get(e.data.id)
+        waiting.delete(e.data.id)
+        if (done) done(e.data.bmp || null)
+      }
+  }
+  return new Promise((resolve) => {
+    const id = ++nextJob
+    waiting.set(id, resolve)
+    workers[id % workers.length].postMessage({ id, url })
+  })
+}
 
 export const RESOLUTIONS = { '720p': [1280, 720], '1080p': [1920, 1080], '2K': [2560, 1440], '4K': [3840, 2160] }
 // the size of the exported picture: the short side is 1080 / 1440 / 2160 and the long side follows the project's shape
@@ -18,6 +40,30 @@ export const DEFAULT_BITRATE = { '720p': 6, '1080p': 12, '2K': 24, '4K': 50 }
 export const PRESETS = { fast: 'veryfast', balanced: 'medium', best: 'slow' }
 
 export const defaultSettings = { res: '1080p', fps: 30, codec: 'h264', bitrate: 12, speed: 'balanced', audioMode: 'mix', container: 'mp4', audioKbps: 192, encoder: 'cpu', outputKind: 'video', audioFormat: 'mp3', loudness: 'off', preset: 'custom' }
+
+// A clip with keyframes is often only moving for part of its length. Where the keyframes leave the picture exactly as it is,
+// nothing has to be drawn and the piece can go straight from the file to the encoder, like a clip without effects.
+// Returns the parts of t0..t1 as [{t0, t1, still}], or null when the whole clip needs drawing (text, effects, a mask, a fixed move...).
+function moveParts(c, t0, t1) {
+  if (c.text) return null
+  const tf = Object.fromEntries(Object.entries(c.tf || {}).filter(([k]) => !(c.anim && c.anim[k] && c.anim[k].length)))
+  if (hasTransform({ ...c, anim: undefined, tf })) return null
+  const atRest = (t) => {
+    const v = evalTransform(c, srcAt(c, t))
+    return PROPS.every((p) => Math.abs(v[p.id] - p.def) < 1e-4)
+  }
+  const pts = [...new Set([t0, ...keyTimes(c).map((s) => tlOf(c, s)).filter((x) => x > t0 + 1e-6 && x < t1 - 1e-6), t1])].sort((p, q) => p - q)
+  const parts = []
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i]
+    const b = pts[i + 1]
+    const still = atRest(a) && atRest((a + b) / 2) && atRest(b)
+    const last = parts[parts.length - 1]
+    if (last && last.still === still) last.t1 = b
+    else parts.push({ t0: a, t1: b, still })
+  }
+  return parts
+}
 
 // Cut the timeline into pieces: plain clip pieces (read by FFmpeg) and transition pieces (rendered here),
 // and work out the audio tracks. Frame counts come from rounding the piece boundaries, so the
@@ -67,9 +113,10 @@ export function buildPlan(state, s) {
     const t0 = c.start + c.ov
     const t1 = c.start + c.dur - nextOv
     if (t1 - t0 > 1e-6) {
-      // a clip with motion (position / scale / rotation / opacity), warp or effects must go through the effects renderer
-      if (hasTransform(c)) raw.push({ kind: 'solo', t0, t1, clip: c })
-      else raw.push({ kind: 'clip', t0, t1, clip: c })
+      // a clip with motion (position / scale / rotation / opacity), warp or effects must go through the effects renderer, and so must text (it is drawn)
+      if (hasTransform(c) || c.text) {
+        for (const p of moveParts(c, t0, t1) || [{ t0, t1, still: false }]) raw.push({ kind: p.still ? 'clip' : 'solo', t0: p.t0, t1: p.t1, clip: c })
+      } else raw.push({ kind: 'clip', t0, t1, clip: c })
     }
   })
   // nothing on the main track (before the first / after the last clip): black, with overlays on top
@@ -237,7 +284,7 @@ export async function runExport({ state, settings, transitions, outPath, onProgr
       const yuv = renderer.canYuv()
       const ring = [0, 1, 2].map(() => new Uint8Array(yuv ? (w * h * 3) / 2 : w * h * 4))
       const flying = []
-      const LOOK = 6 // frames decoded ahead, on other threads
+      const LOOK = 20 // frames decoded ahead, on other threads
 
       for (let ti = 0; ti < trans.length; ti++) {
         const s = trans[ti]
@@ -249,22 +296,33 @@ export async function runExport({ state, settings, transitions, outPath, onProgr
           if (!l.a.isText) srcs.push({ li, which: 'a', side: l.a })
           if (l.b && !l.b.isText) srcs.push({ li, which: 'b', side: l.b })
         })
+        // The frames are taken from the file while the rendering goes on: it starts as soon as the first ones are there.
         for (const x of srcs) {
-          x.info = await window.api.exportExtract({ name: `t${s.k}l${x.li}${x.which}`, file: x.side.file, isImage: x.side.isImage, start: x.side.start, dur: s.dur * (x.side.speed || 1), speed: x.side.speed || 1, fps, w, h, maxFrames: s.frames + 2, noPad: true })
+          x.dir = await window.api.exportExtractDir(`t${s.k}l${x.li}${x.which}`)
+          x.done = window.api.exportExtract({ name: `t${s.k}l${x.li}${x.which}`, file: x.side.file, isImage: x.side.isImage, start: x.side.start, dur: s.dur * (x.side.speed || 1), speed: x.side.speed || 1, fps, w, h, maxFrames: s.frames + 2, noPad: true }).then((info) => (x.info = info))
+          x.done.catch(() => {})
         }
         if (cancelled) throw new Error('Export cancelled')
         await window.api.exportSegBegin({ k: s.k, w, h, fps, yuv })
         const cache = new Map()
         const textCvs = new Map()
-        for (const l of s.layers) if (l.a.isText) await loadFont(l.a.clip.text)
+        for (const l of s.layers) for (const sd of [l.a, l.b]) if (sd && sd.isText) await loadFont(sd.clip.text)
+        // the picture of frame number i; a clip that ends early keeps showing its last frame
+        const picture = async (x, i) => {
+          for (;;) {
+            const idx = x.info ? Math.min(i, x.info.count - 1) : i
+            const bmp = await decodeFrame(toUrl(`${x.dir}\\${pad5(idx + 1)}.png`))
+            if (bmp) return bmp
+            if (cancelled) throw new Error('Export cancelled')
+            if (x.info) throw new Error('A picture of the video could not be read.')
+            await Promise.race([x.done, new Promise((res) => setTimeout(res, 15))])
+          }
+        }
         const load = (x, i) => {
-          const idx = Math.min(i, x.info.count - 1)
-          const ck = `${x.li}${x.which}${x.info.count === 1 ? 0 : idx}`
+          const ck = `${x.li}${x.which}${x.side.isImage ? 0 : i}`
           if (cache.has(ck)) return cache.get(ck)
-          const img = new Image()
-          img.src = toUrl(`${x.info.dir}\\${pad5(idx + 1)}.png`)
-          // an ImageBitmap that is already flipped the way the renderer wants it uploads without a slow flip on the CPU
-          const p = img.decode().then(() => createImageBitmap(img, { imageOrientation: 'flipY', premultiplyAlpha: 'none', colorSpaceConversion: 'none' }))
+          const p = picture(x, i)
+          p.catch(() => {})
           cache.set(ck, p)
           if (cache.size > LOOK * srcs.length + 8) cache.delete(cache.keys().next().value)
           return p
@@ -312,11 +370,14 @@ export async function runExport({ state, settings, transitions, outPath, onProgr
           else renderer.read(slot)
           flying.push(window.api.exportFrame(slot))
           if (flying.length >= ring.length) await flying.shift()
+          // (their memory goes back at once instead of when the browser gets round to it)
+          srcs.forEach((x, j) => !x.side.isImage && imgs[j].close())
           doneT++
           report(label)
         }
         await Promise.all(flying.splice(0))
         await window.api.exportSegEnd()
+        await Promise.all(srcs.map((x) => x.done))
       }
     }
     if (cancelled) throw new Error('Export cancelled')
@@ -336,4 +397,4 @@ export async function runExport({ state, settings, transitions, outPath, onProgr
   }
 }
 
-if (typeof window !== 'undefined') window.__vibeExport = { buildPlan, runExport } // used by the developer self-test
+if (typeof window !== 'undefined') window.__vibeExport = { buildPlan, runExport, cancelExport } // used by the developer self-test

@@ -429,17 +429,23 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
   return (
     <div className="app" ref={appRef} style={{ display: active ? undefined : 'none' }} onDragOver={(e) => e.preventDefault()} onDrop={onDropFiles}>
       <header className="topbar">
-        <button onClick={onNew} title="Start another project in a new tab">New</button>
-        <button onClick={onOpen} title="Open a project in a new tab">Open…</button>
-        <button onClick={onOpenPicture} title="Open a picture from your computer in a new tab, to edit it">Open picture…</button>
-        <button onClick={() => saveProject(false)}>Save</button>
-        <button onClick={() => saveProject(true)}>Save as…</button>
-        <button onClick={() => dispatch({ type: 'undo' })} disabled={!state.past.length} title="Undo (Ctrl+Z)"><Icon name="undo" size={14} /></button>
-        <button onClick={() => dispatch({ type: 'redo' })} disabled={!state.future.length} title="Redo (Ctrl+Y)"><Icon name="redo" size={14} /></button>
+        <span className="tb-group">
+          <button onClick={onNew} title="Start another project in a new tab">New</button>
+          <button onClick={onOpen} title="Open a project in a new tab">Open…</button>
+          <button onClick={onOpenPicture} title="Open a picture from your computer in a new tab, to edit it">Open picture…</button>
+        </span>
+        <span className="tb-group">
+          <button onClick={() => saveProject(false)} title="Save (Ctrl+S)">Save</button>
+          <button onClick={() => saveProject(true)}>Save as…</button>
+        </span>
+        <span className="tb-group">
+          <button onClick={() => dispatch({ type: 'undo' })} disabled={!state.past.length} title="Undo (Ctrl+Z)"><Icon name="undo" size={14} /></button>
+          <button onClick={() => dispatch({ type: 'redo' })} disabled={!state.future.length} title="Redo (Ctrl+Y)"><Icon name="redo" size={14} /></button>
+        </span>
         <span className="proj-name">{projectName}{dirty ? ' •' : ''}</span>
         <span className="canvas-size" title="The size of the canvas, in pixels">{sizeLabel}</span>
         <span className="spacer" />
-        <button onClick={() => setTour(true)} title="A short tour of the main features"><Icon name="help" size={14} /> Tutorial</button>
+        <button onClick={() => setTour(true)} title="Tutorial: a short tour of the main features"><Icon name="help" size={15} /></button>
         <button className="primary" onClick={() => setShowExport(true)} disabled={!state.overlayClips.length}>
           <Icon name="upload" /> Export picture…
         </button>
