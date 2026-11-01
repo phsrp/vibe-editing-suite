@@ -8,6 +8,7 @@ import Tooltip from './Tooltip.jsx'
 import Icon from './Icon.jsx'
 import SettingsDialog from './SettingsDialog.jsx'
 import UpdateDialog from './UpdateDialog.jsx'
+import McpAskDialog from './McpAskDialog.jsx'
 import ExportTab from './ExportTab.jsx'
 import ColourTab from './ColourTab.jsx'
 import { cancelExport } from './exporter.js'
@@ -227,6 +228,12 @@ export default function App() {
       }),
     []
   )
+  const [mcpAsks, setMcpAsks] = useState([]) // one question at a time, the rest wait their turn
+  useEffect(() => window.api.onMcpAsk((q) => setMcpAsks((list) => [...list, q])), [])
+  const answerMcp = (allow) => {
+    window.api.mcpAnswer({ id: mcpAsks[0].id, allow })
+    setMcpAsks((list) => list.slice(1))
+  }
 
   // the window warns on close if any project has unsaved changes
   useEffect(() => {
@@ -478,6 +485,7 @@ export default function App() {
           <button onClick={() => setPreview(null)} title="Go back to the theme that is in use">Stop</button>
         </div>
       )}
+      {mcpAsks[0] && <McpAskDialog key={mcpAsks[0].id} detail={mcpAsks[0].detail} onAnswer={answerMcp} />}
     </div>
   )
 }

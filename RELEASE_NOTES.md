@@ -1,9 +1,4 @@
-- Export is about twice as fast for clips with keyframes, and parts of a clip that do not move now skip the slow route completely
-- Text is now a normal video clip: it can go on any video track, including the main one, and Add text uses a track with room before making a new one
-- Paste now lands at the playhead, on a track with room, and a new track is only made when none has room
-- New Close gaps button: choose whether clips slide back after a delete or leave a gap (G key)
-- The magnet now really works on the main track, with a bright line that shows where a clip stuck
-- Reset on a keyframed value now only resets it at the playhead and keeps your other keyframes (the bin icon removes them all)
-- Project pictures on Home come back by themselves if they went missing
-- AI connection: an AI app such as Claude can read your timeline and edit it while the editor is open. Off until you turn it on in Settings, with a setup guide there
-- A calmer look: tidier toolbars, hover animations and new tooltips
+- The AI connection's "Allow" question now matches the editor's look, and comes to the front when an AI app asks
+- Fixed: the Copy buttons in the AI connection setup guide did nothing
+- Fixed: the Claude Code setup command had its parts in the wrong order and gave an error
+- The setup guide and the GitHub page now explain what to do if "claude" is not recognized, and what the AI can do

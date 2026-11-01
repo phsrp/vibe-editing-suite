@@ -13,8 +13,15 @@ contextBridge.exposeInMainWorld('api', {
   recentAdd: (entry) => ipcRenderer.invoke('recent:add', entry),
   recentRepair: () => ipcRenderer.invoke('recent:repair'),
   recentRemove: (file) => ipcRenderer.invoke('recent:remove', file),
+  copyText: (text) => ipcRenderer.invoke('clipboard:write', text),
   mcpInfo: () => ipcRenderer.invoke('mcp:info'),
   mcpResult: (r) => ipcRenderer.send('mcp:result', r),
+  mcpAnswer: (r) => ipcRenderer.send('mcp:answer', r),
+  onMcpAsk: (cb) => {
+    const h = (_e, d) => cb(d)
+    ipcRenderer.on('mcp:ask', h)
+    return () => ipcRenderer.removeListener('mcp:ask', h)
+  },
   onMcpCall: (cb) => {
     const h = (_e, d) => cb(d)
     ipcRenderer.on('mcp:call', h)

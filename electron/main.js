@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const crypto = require('crypto')
@@ -808,6 +808,7 @@ function readSettings() {
     return { ...DEFAULT_SETTINGS }
   }
 }
+ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text)))
 ipcMain.handle('settings:get', () => readSettings())
 ipcMain.handle('settings:set', (_e, patch) => {
   const next = { ...readSettings(), ...patch }

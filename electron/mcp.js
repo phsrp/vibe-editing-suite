@@ -4,7 +4,7 @@
 //
 // Off by default. The server only listens on 127.0.0.1, wants the key in mcp.json on every request, and turns away anything a
 // web page could send (a browser always sends Origin). The list of what can be done is in mcpTools.js.
-const { app, dialog, ipcMain } = require('electron')
+const { app, ipcMain } = require('electron')
 const http = require('http')
 const path = require('path')
 const fs = require('fs')
@@ -23,6 +23,7 @@ let lastError = ''
 let getWindow = () => null
 const activity = [] // the last things the AI did, shown in the settings
 const waiting = new Map() // call id -> {resolve, reject}
+const asking = new Map() // question id -> resolve(true or false), while the person is being asked
 let nextCall = 1
 
 const statePath = () => path.join(app.getPath('userData'), 'mcp.json')
@@ -107,10 +108,20 @@ async function allowed(tool, args) {
   let names = ''
   if (tool.name === 'delete_clips') names = await askPage('describe_clips', args).then((r) => r.text).catch(() => '')
   const win = getWindow()
-  const box = { type: 'question', buttons: ['Allow', 'Do not allow'], defaultId: 1, cancelId: 1, noLink: true, title: 'AI connection', message: 'An AI app wants to do this:', detail: tool.says(args, names) }
-  if (win && !win.isDestroyed() && win.isMinimized()) win.restore()
-  const r = await (win && !win.isDestroyed() ? dialog.showMessageBox(win, box) : dialog.showMessageBox(box))
-  return r.response === 0
+  if (!win || win.isDestroyed()) return false
+  if (win.isMinimized()) win.restore()
+  win.show()
+  win.moveTop()
+  win.focus()
+  if (!win.isFocused()) {
+    win.flashFrame(true)
+    win.once('focus', () => win.flashFrame(false))
+  }
+  const id = nextCall++
+  return new Promise((resolve) => {
+    asking.set(id, resolve)
+    win.webContents.send('mcp:ask', { id, detail: tool.says(args, names) })
+  })
 }
 
 async function callTool(name, args) {
@@ -195,6 +206,8 @@ function stop() {
   } catch {}
   for (const w of waiting.values()) w.reject(new Error('The AI connection was turned off.'))
   waiting.clear()
+  for (const say of asking.values()) say(false)
+  asking.clear()
 }
 
 // on or off, as the settings say
@@ -209,7 +222,7 @@ function info() {
     error: lastError,
     activity,
     desktopConfig: JSON.stringify({ mcpServers: { [NAME]: entry } }, null, 2),
-    codeCommand: `claude mcp add --transport stdio --env ELECTRON_RUN_AS_NODE=1 ${NAME} -- "${process.execPath}" "${bridgePath()}"`,
+    codeCommand: `claude mcp add --transport stdio --scope user ${NAME} --env ELECTRON_RUN_AS_NODE=1 -- "${process.execPath}" "${bridgePath()}"`, // --env takes every word after it, so the name goes first
   }
 }
 
@@ -221,6 +234,12 @@ function register({ getWindow: gw }) {
     waiting.delete(id)
     if (error) w.reject(new Error(error))
     else w.resolve(result || {})
+  })
+  ipcMain.on('mcp:answer', (_e, { id, allow }) => {
+    const say = asking.get(id)
+    if (!say) return
+    asking.delete(id)
+    say(allow === true)
   })
   ipcMain.handle('mcp:info', () => info())
   app.on('before-quit', stop)

@@ -286,6 +286,8 @@ button.big { padding: 11px 22px; font-size: 14px; border-radius: 10px; }
 .seg button:last-child { border-radius: 0 6px 6px 0; margin-left: -1px; }
 .seg button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); position: relative; }
 .update-modal { width: 440px; }
+.modal-bg.ask { z-index: 1500; }
+.ask-text { margin: 8px 0 10px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto; }
 .upd-text { margin: 8px 0 10px; line-height: 1.6; }
 
 .upd-new { font-weight: 700; margin: 10px 0 4px; }

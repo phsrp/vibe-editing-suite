@@ -169,7 +169,7 @@ function AiPage({ settings, setSettings }) {
     return () => clearInterval(t)
   }, [])
   const copy = async (what, text) => {
-    await navigator.clipboard.writeText(text)
+    await window.api.copyText(text)
     setCopied(what)
     setTimeout(() => setCopied((c) => (c === what ? '' : c)), 1800)
   }
@@ -201,7 +201,7 @@ function AiPage({ settings, setSettings }) {
           {info && <div className="ai-code"><pre>{info.desktopConfig}</pre><button className="mini wide" onClick={() => copy('desktop', info.desktopConfig)}>{copied === 'desktop' ? 'Copied' : 'Copy'}</button></div>}
         </li>
         <li>
-          <b>Claude Code:</b> run this once in a terminal, then start a new session.
+          <b>Claude Code:</b> run this once in a terminal, then start a new session. If you use Claude Code inside the Claude desktop app and the terminal says "claude" is not recognized, paste this into a Code chat instead and ask Claude to add it.
           {info && <div className="ai-code"><pre>{info.codeCommand}</pre><button className="mini wide" onClick={() => copy('code', info.codeCommand)}>{copied === 'code' ? 'Copied' : 'Copy'}</button></div>}
         </li>
         <li><b>Another app that supports MCP:</b> add a local (stdio) server. The command, arguments and environment are the same as in the Claude Desktop text.</li>

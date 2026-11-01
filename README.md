@@ -30,10 +30,14 @@ A Windows video editor and picture editor focused on simplicity with many featur
 An AI app on your PC, such as Claude, can read your timeline and edit it for you while the editor is open. It uses [MCP](https://modelcontextprotocol.io), an open standard for connecting AI apps to programs. It is off until you turn it on.
 
 1. Open **Settings > AI connection** and turn the switch on.
-2. Copy the text from the setup guide on that page into your AI app. For Claude Desktop that is Settings > Developer > Edit Config, then restart it. For Claude Code it is one command.
-3. Open a video project and ask something like "look at my timeline and add a title at the start".
+2. Copy the text from the setup guide on that page into your AI app. For Claude Desktop that is Settings > Developer > Edit Config, then restart it. For Claude Code it is one command. If you use Claude Code inside the Claude desktop app, paste that command into a Code chat and ask Claude to add it.
+3. Open a video project, start a new chat in your AI app and ask something like "look at my timeline and add a title at the start".
 
-You see every change as it happens, and Ctrl+Z takes it back. You are asked first before it deletes clips, adds files or saves, and it can only open the Export tab, not start an export. It works with video projects for now.
+**What it can do:** read your project and see the picture at any moment, add clips and text, move, trim, split and delete clips, set keyframes, transitions, effects and volume, add markers, and undo or redo.
+
+You see every change as it happens, and Ctrl+Z takes it back. The editor asks you first before it deletes clips, adds files or saves, and it can only open the Export tab, not start an export. It works with video projects for now.
+
+The connection only works on this PC, and any MCP app that can start a local program can use it. Open the editor first: if your AI app was started while the editor was closed, or the editor has just updated, restart the AI app or reconnect it.
 
 ## Tutorial included, don't worry
 
