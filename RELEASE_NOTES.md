@@ -1,4 +1,6 @@
-- Edit a picture from your computer: New project > Edit a picture opens any picture in the drawing editor at its own size, so you can paint on it, add layers and export it again
-- Better blur in the video and image editors: a real Gaussian blur that looks smooth at every strength and the same at any resolution
-- Faster exports of clips with effects, transitions or overlays (frames are handed to the encoder in a smaller, faster form)
-- The Export tab now warns when a graphics card encoder is not found, and when H.265 on the processor with Best quality will be very slow
+- The drawing editor is now part of the picture editor: one place with layers, pressure brushes, Krita brush packs, smudge, shapes, fill, selections, AI smart select, text, masks and effects
+- Open picture button (on Home, in New project and in the picture editor): opens any picture from your PC in the picture editor at its own size
+- Your old drawing projects still open, as picture projects, with their layers kept
+- Blend modes for every layer in the picture editor (Multiply, Screen, Overlay and more)
+- Pictures and text layers can be turned into pixels so you can paint directly on them
+- Big canvases stay smooth while painting

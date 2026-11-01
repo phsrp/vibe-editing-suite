@@ -161,7 +161,7 @@ class Presence {
 // what to say for each part of the app
 function activityFor(p, showName) {
   if (!p) return null
-  const text = { home: 'Browsing projects', video: 'Editing a video', image: 'Editing a picture', drawing: 'Drawing', export: 'Exporting a video' }
+  const text = { home: 'Browsing projects', video: 'Editing a video', image: 'Editing a picture', export: 'Exporting a video' }
   const details = text[p.kind] || 'Using the editor'
   const name = showName && p.name && p.name !== 'Untitled' ? String(p.name).slice(0, 100) : ''
   return { details, state: name || undefined }

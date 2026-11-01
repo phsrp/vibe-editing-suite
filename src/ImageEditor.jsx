@@ -1,28 +1,39 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
-import { reducer, initialState } from './state.js'
-import ImagePreview, { PAINT_TOOLS } from './ImagePreview.jsx'
+import { reducer, initialState, uid, soleVideoClip, overlayLayout } from './state.js'
+import ImagePreview from './ImagePreview.jsx'
 import ImageInspector from './ImageInspector.jsx'
 import LayersPanel from './LayersPanel.jsx'
 import Icon from './Icon.jsx'
-import { serializeImage, restoreImage } from './project.js'
-import { exportImage } from './imageRender.js'
+import { serializeImage, serializeImageFull, restoreImage, convertDrawingProject, isDrawingProject } from './project.js'
+import { exportImage, buildLayers, backgroundOf, makeImageRenderer, imagesReady } from './imageRender.js'
 import { actionFor } from './keybinds.js'
 import Tour, { tourSeen, markTourSeen } from './Tour.jsx'
 import { IMAGE_STEPS } from './tourSteps.js'
+import { usePaintKit, PIXEL_TOOLS } from './paint/usePaintKit.js'
+import { makeSelection, invertSelection } from './paint/selection.js'
+import { targetClip, deleteSelected, moveSelected, copyPixels, addPixelLayer, commitPixels } from './paint/pixelOps.js'
+import { rasterEntry, rasterGrab, rasterFromCanvas } from './paint/raster.js'
 
 const TOOLS = [
   { id: 'move', icon: 'move', label: 'Move and transform (V)', key: 'V' },
   { id: 'brush', icon: 'brush', label: 'Brush (B)', key: 'B' },
   { id: 'eraser', icon: 'eraser', label: 'Eraser (E)', key: 'E' },
-  { id: 'line', icon: 'line', label: 'Line', key: 'L' },
-  { id: 'rect', icon: 'square', label: 'Rectangle', key: 'U' },
-  { id: 'ellipse', icon: 'circle', label: 'Ellipse', key: 'O' },
+  { id: 'smudge', icon: 'smudge', label: 'Smudge: push the colours around (S)', key: 'S' },
+  { id: 'line', icon: 'line', label: 'Line (L)', key: 'L' },
+  { id: 'rect', icon: 'square', label: 'Rectangle (U)', key: 'U' },
+  { id: 'ellipse', icon: 'circle', label: 'Ellipse and circle (O)', key: 'O' },
+  { id: 'fill', icon: 'bucket', label: 'Fill with colour (G)', key: 'G' },
   { id: 'eyedropper', icon: 'pipette', label: 'Eyedropper: pick a colour (I)', key: 'I' },
+  { id: 'select', icon: 'select', label: 'Select: click a line or shape, or drag a box (M)', key: 'M' },
+  { id: 'lasso', icon: 'lasso', label: 'Lasso: draw around what to select (Q)', key: 'Q' },
+  { id: 'smart', icon: 'star', label: 'Smart select (AI): click the subject or draw a rough box around it (W)', key: 'W' },
 ]
+// what was copied or cut with Ctrl+C / Ctrl+X: {canvas, x, y} (shared by all picture editor tabs)
+let pixelClip = null
 const isMaskMode = (m) => m === 'mask' || m === 'maskdraw' || m === 'maskpoly' || m === 'maskdrawsmart'
 
 // One open image project (a tab). Layers on a canvas: pictures, paint and text, each with transform, mask, effects and colour.
-export default function ImageEditor({ tabId, active, initial, binds, onMeta, onNew, onOpen, registerHandle }) {
+export default function ImageEditor({ tabId, active, initial, binds, onMeta, onNew, onOpen, onOpenPicture, registerHandle }) {
   const [state, dispatch] = useReducer(reducer, { ...initialState, canvas: (initial && initial.canvas) || { w: 1920, h: 1080, bg: '#ffffff' } })
   const stateRef = useRef(state)
   stateRef.current = state
@@ -36,11 +47,18 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
   dirtyRef.current = dirty
   const savedJson = useRef(serializeImage(state))
   const autosavedJson = useRef('')
-  const projectName = projectPath ? projectPath.split(/[\\/]/).pop().replace(/\.json$/i, '') : 'Untitled'
+  // "Open picture": a tab that starts from a picture file (its name names the project until it is saved)
+  const pictureName = initial && initial.picture && initial.picture.name ? initial.picture.name.replace(/\.[^.]+$/, '') : ''
+  const projectName = projectPath ? projectPath.split(/[\\/]/).pop().replace(/\.json$/i, '') : pictureName || 'Untitled'
   const [tool, setToolState] = useState('move')
   const [mode, setMode] = useState('transform')
   const [freeMode, setFreeMode] = useState(false)
-  const [brush, setBrush] = useState({ color: '#000000', size: 24, opacity: 1, hardness: 0.8, fill: false })
+  const [sel, setSelState] = useState(null) // the selected area of pixels (see paint/selection.js)
+  const selRef = useRef(null)
+  const setSel = (s) => {
+    selRef.current = s
+    setSelState(s)
+  }
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState('')
   const [showExport, setShowExport] = useState(false)
@@ -72,6 +90,7 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
     setNote(t)
     setTimeout(() => setNote((n) => (n === t ? '' : n)), 4000)
   }
+  const kit = usePaintKit(flash) // colours, brush, sizes... of the painting tools
 
   // choosing a tool: painting tools need the handles off; the move tool shows the transform box again
   const setTool = (t) => {
@@ -83,6 +102,61 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
   useEffect(() => {
     if (isMaskMode(mode) && tool !== 'move') setToolState('move')
   }, [mode])
+
+  const toolRef = useRef(tool)
+  toolRef.current = tool
+
+  // ---- selections and layers of pixels
+  const selSize = () => {
+    const c = targetClip(stateRef.current)
+    const s = stateRef.current
+    return c ? [c.raster.w, c.raster.h] : [s.canvas.w, s.canvas.h]
+  }
+  const selActions = {
+    all: () => {
+      const [w, h] = selSize()
+      setSel(makeSelection(w, h, { type: 'all' }, 'replace', null))
+    },
+    none: () => setSel(null),
+    invert: () => {
+      if (!selRef.current) return
+      const [w, h] = selSize()
+      setSel(invertSelection(w, h, selRef.current))
+    },
+  }
+  const layerActions = {
+    clear: (clip) => {
+      const e = rasterEntry(clip)
+      const full = { x: 0, y: 0, w: e.w, h: e.h }
+      const before = rasterGrab(e, full)
+      e.canvas.getContext('2d').clearRect(0, 0, e.w, e.h)
+      commitPixels(clip, dispatch, full, before)
+    },
+    // a picture / text layer drawn into pixels (with its move, size, mask and effects), so it can be painted on
+    rasterize: async (clip) => {
+      const s = stateRef.current
+      const w = s.canvas.w
+      const h = s.canvas.h
+      setBusy(true)
+      try {
+        await imagesReady(s)
+        const cv = document.createElement('canvas')
+        cv.width = w
+        cv.height = h
+        const r = makeImageRenderer(cv)
+        const one = { ...s, overlayClips: [clip], videoTracks: s.videoTracks.filter((t) => t.id === clip.trackId), rowOrder: ['v:' + clip.trackId], hiddenRows: [], lockedRows: [] }
+        r.renderLayers(buildLayers(one, w, h), [0, 0, 0, 0])
+        const rid = uid()
+        rasterFromCanvas(rid, w, h, cv)
+        dispatch({ type: 'imgRasterize', id: clip.id, rasterId: rid, w, h })
+        flash('The layer is now pixels: you can paint, smudge and select on it.')
+      } catch (e) {
+        flash('The layer could not be turned into pixels: ' + String((e && e.message) || e))
+      } finally {
+        setBusy(false)
+      }
+    },
+  }
 
   // ---- pictures in
   const addPictures = (items) => {
@@ -99,7 +173,15 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
       const tag = e.target && e.target.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       const files = [...((e.clipboardData && e.clipboardData.files) || [])].filter((f) => /^image\//.test(f.type))
-      if (!files.length) return
+      if (!files.length) {
+        // pixels copied with Ctrl+C / Ctrl+X in the editor: a new pixel layer, in the same place
+        if (pixelClip) {
+          e.preventDefault()
+          addPixelLayer(stateRef.current, dispatch, pixelClip.canvas, pixelClip.x, pixelClip.y, 'Pasted')
+          flash('Pasted as a new layer.')
+        }
+        return
+      }
       e.preventDefault()
       setBusy(true)
       try {
@@ -162,6 +244,8 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
   const loadFromJson = async (json, file) => {
     setBusy(true)
     try {
+      // a project of the separate drawing editor of an earlier version: its layers become pixel layers
+      if (isDrawingProject(json)) json = convertDrawingProject(json)
       const r = await restoreImage(json)
       dispatch({ type: 'loadImageProject', ...r })
       setProjectPath(file)
@@ -178,7 +262,7 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
   const saveProject = async (asNew) => {
     const s = stateRef.current
     const json = serializeImage(s)
-    const file = await window.api.saveProject(asNew ? null : projectRef.current, json, `${projectName === 'Untitled' ? 'My picture' : projectName}.json`)
+    const file = await window.api.saveProject(asNew ? null : projectRef.current, await serializeImageFull(s), `${projectName === 'Untitled' ? 'My picture' : projectName}.json`)
     if (!file) return false
     setProjectPath(file)
     savedJson.current = json
@@ -190,6 +274,11 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
   }
   useEffect(() => {
     if (initial && initial.json) loadFromJson(initial.json, initial.file)
+    // Open picture: the picture is the first layer and the canvas takes its size
+    if (initial && initial.picture) {
+      dispatch({ type: 'addMedia', items: [initial.picture] })
+      dispatch({ type: 'imgAddImage', mediaId: initial.picture.id, fitCanvas: true })
+    }
   }, [])
   useEffect(() => {
     registerHandle(tabId, { save: () => saveProject(false), isDirty: () => dirtyRef.current, getState: () => stateRef.current, dispatch })
@@ -207,11 +296,11 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
       const json = serializeImage(stateRef.current)
       if (json === savedJson.current) return
       if (projectRef.current) {
-        await window.api.saveProject(projectRef.current, json)
+        await window.api.saveProject(projectRef.current, await serializeImageFull(stateRef.current))
         savedJson.current = json
         setDirty(false)
       } else if (json !== autosavedJson.current) {
-        await window.api.autosave(tabId, json)
+        await window.api.autosave(tabId, await serializeImageFull(stateRef.current))
         autosavedJson.current = json
       }
     }, 15000)
@@ -233,12 +322,68 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
         open: onOpen,
         undo: () => dispatch({ type: 'undo' }),
         redo: () => dispatch({ type: 'redo' }),
-        delete: () => stateRef.current.selection.forEach((id) => dispatch({ type: 'imgRemove', id })),
+        // with an area of pixels selected, Delete rubs those pixels out; otherwise it removes the chosen layers
+        delete: () => {
+          if (selRef.current && deleteSelected(stateRef.current, dispatch, selRef.current)) return
+          stateRef.current.selection.forEach((id) => dispatch({ type: 'imgRemove', id }))
+        },
         duplicate: () => stateRef.current.selection.forEach((id) => dispatch({ type: 'imgDuplicate', id })),
       }
       if (action && h[action]) {
         e.preventDefault()
         return h[action]()
+      }
+      // painting shortcuts
+      const k = e.key
+      const lower = k.toLowerCase()
+      if (e.ctrlKey || e.metaKey) {
+        if (lower === 'd') {
+          e.preventDefault()
+          return setSel(null)
+        }
+        if (lower === 'a' && PIXEL_TOOLS.includes(toolRef.current)) {
+          e.preventDefault()
+          return selActions.all()
+        }
+        if (lower === 'i' && e.shiftKey) {
+          e.preventDefault()
+          return selActions.invert()
+        }
+        if ((lower === 'c' || lower === 'x') && selRef.current) {
+          const c = copyPixels(stateRef.current, selRef.current)
+          if (c) {
+            e.preventDefault()
+            pixelClip = c
+            if (lower === 'x') deleteSelected(stateRef.current, dispatch, selRef.current)
+            flash(lower === 'x' ? 'Cut. Paste it with Ctrl+V.' : 'Copied. Paste it with Ctrl+V.')
+          }
+        }
+        return
+      }
+      if (!e.altKey && PIXEL_TOOLS.includes(toolRef.current)) {
+        // arrow keys slide what is selected by one pixel (Shift: ten)
+        if (selRef.current && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(k)) {
+          e.preventDefault()
+          const s = e.shiftKey ? 10 : 1
+          const next = moveSelected(stateRef.current, dispatch, selRef.current, k === 'ArrowLeft' ? -s : k === 'ArrowRight' ? s : 0, k === 'ArrowUp' ? -s : k === 'ArrowDown' ? s : 0)
+          if (next) setSel(next)
+          return
+        }
+        if (k === '[' || k === ']') {
+          e.preventDefault()
+          const s = kit.optsRef.current.size
+          const step = Math.max(1, Math.round(s * 0.12))
+          return kit.setOpts({ size: Math.max(1, Math.min(1000, s + (k === ']' ? step : -step))) })
+        }
+        if (lower === 'x') {
+          e.preventDefault()
+          return kit.swap()
+        }
+        if (/^[0-9]$/.test(k)) {
+          e.preventDefault()
+          return kit.setOpts({ opacity: k === '0' ? 1 : +k / 10 })
+        }
+        if (k === 'Escape' && selRef.current) return setSel(null)
       }
       // single letters pick a tool (not while Ctrl / Alt is held)
       if (!e.ctrlKey && !e.altKey && !e.metaKey) {
@@ -257,6 +402,7 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
   }, [binds, mode])
 
   if (active) window.__vibe = { dispatch, state, addMedia: (items) => dispatch({ type: 'addMedia', items }) } // used by the developer self-test
+  if (active) window.__paint = { kit, builtin: kit.builtin, sel: () => selRef.current, setSel, setTool } // used by the developer self-test
 
   const sizeLabel = `${state.canvas.w} × ${state.canvas.h}`
 
@@ -285,6 +431,7 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
       <header className="topbar">
         <button onClick={onNew} title="Start another project in a new tab">New</button>
         <button onClick={onOpen} title="Open a project in a new tab">Open…</button>
+        <button onClick={onOpenPicture} title="Open a picture from your computer in a new tab, to edit it">Open picture…</button>
         <button onClick={() => saveProject(false)}>Save</button>
         <button onClick={() => saveProject(true)}>Save as…</button>
         <button onClick={() => dispatch({ type: 'undo' })} disabled={!state.past.length} title="Undo (Ctrl+Z)"><Icon name="undo" size={14} /></button>
@@ -310,10 +457,10 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
         </div>
         <LayersPanel state={state} dispatch={dispatch} open={layersOpen} setOpen={setLayersOpen} onAddPicture={importPictures} busy={busy} />
         <main className="stage">
-          <ImagePreview state={state} dispatch={dispatch} mode={mode} setMode={setMode} freeMode={freeMode} tool={tool} brush={brush} setBrush={setBrush} canvasRef={canvasRef} />
+          <ImagePreview state={state} dispatch={dispatch} mode={mode} setMode={setMode} freeMode={freeMode} tool={tool} kit={kit} sel={sel} setSel={setSel} canvasRef={canvasRef} />
           <div className="note-line">{note}</div>
         </main>
-        <ImageInspector state={state} dispatch={dispatch} mode={mode} setMode={setMode} freeMode={freeMode} setFreeMode={setFreeMode} tool={tool} brush={brush} setBrush={setBrush} open={inspOpen} setOpen={setInspOpen} />
+        <ImageInspector state={state} dispatch={dispatch} mode={mode} setMode={setMode} freeMode={freeMode} setFreeMode={setFreeMode} tool={tool} kit={kit} sel={sel} selActions={selActions} layerActions={layerActions} open={inspOpen} setOpen={setInspOpen} />
       </div>
       {tour && active && <Tour steps={IMAGE_STEPS} rootRef={appRef} onClose={closeTour} />}
       {showExport && <ExportPictureDialog state={state} name={projectName === 'Untitled' ? 'My picture' : projectName} onClose={() => setShowExport(false)} flash={flash} />}

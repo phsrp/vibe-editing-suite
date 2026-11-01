@@ -1,4 +1,4 @@
-// The brush engine of the drawing editor.
+// The brush engine of the painting tools of the picture editor.
 //
 // A BrushDef (see kritaBrush.js, builtinBrushes.js) is turned into "dabs": one tip picture stamped again and again along the
 // path of the pen. The dabs are stamped into a stroke buffer (a transparent canvas the size of the picture); while the stroke

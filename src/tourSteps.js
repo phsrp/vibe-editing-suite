@@ -103,15 +103,15 @@ export const VIDEO_STEPS = [
   },
 ]
 
-export const DRAWING_STEPS = [
+export const IMAGE_STEPS = [
   {
-    title: 'Welcome to the drawing editor',
-    text: 'A place to draw and paint, with pen pressure if you have a drawing tablet. A short tour of the main things; replay it any time with the Tutorial button.',
+    title: 'Welcome to the picture editor',
+    text: 'Edit pictures and paint: layers, brushes with pen pressure, selections, text, masks and effects. A short tour of the main things; leave it any time and replay it with the Tutorial button at the top.',
   },
   {
     target: '.toolbar-v',
     title: 'Tools',
-    text: 'Brush, eraser, smudge, line, rectangle, ellipse, fill, eyedropper and selection. Hover a tool to see its key. Hold Space to move around, and Alt to pick a colour.',
+    text: 'Move, brush, eraser, smudge, line, shapes, fill, eyedropper, selections and text. Hover a tool to see its key. Painting tools open their settings and brushes on the right; Alt picks a colour.',
   },
   {
     target: '.toolbar-v',
@@ -119,60 +119,9 @@ export const DRAWING_STEPS = [
     text: 'Select clicks a line or shape. Lasso selects what you draw around. Smart select (AI) finds the exact edge of a subject from a click or a rough box. Then drag inside a selection to move those pixels, or hold Alt to move a copy.',
   },
   {
-    target: '.dr-view',
-    title: 'The canvas',
-    text: 'Use the mouse wheel to zoom and the Space key (or the middle mouse button) to move around. The ring shows how big your brush is.',
-  },
-  {
-    target: ['.dr-colour', '.inspector'],
-    title: 'Colour',
-    text: 'Click in the square to pick a colour. The two big swatches are the brush colour and the background colour; X swaps them.',
-  },
-  {
-    target: ['.dr-opts', '.inspector'],
-    title: 'Size, opacity and smoothing',
-    text: 'Size changes with the [ and ] keys. Smoothing steadies a shaky line. Mirror draws the other half for you.',
-  },
-  {
-    target: ['.dr-brushes', '.inspector'],
-    title: 'Brushes and Krita packs',
-    text: 'Pick a brush here. “+ Krita pack” adds brush packs made for Krita (.bundle files) and they show up in this list.',
-  },
-  {
     target: '.layers .layer-add',
     title: 'Layers',
-    text: 'Draw on separate layers so you can change things later. Drag layers to reorder, and use the eye and the padlock to hide or protect one.',
-  },
-  {
-    target: '.topbar button[title^="Undo"]',
-    title: 'Undo',
-    text: 'Undo (Ctrl+Z) takes back a stroke. Redo is Ctrl+Y.',
-  },
-  {
-    target: '.topbar .primary',
-    title: 'Export',
-    text: 'Save your drawing as PNG, JPG or WebP. Save keeps all layers so you can keep working on it.',
-  },
-  {
-    title: 'That is the tour',
-    text: 'Have fun. Hovering over almost any button shows what it does. Press the Tutorial button at the top to see this again.',
-  },
-]
-
-export const IMAGE_STEPS = [
-  {
-    title: 'Welcome to the image editor',
-    text: 'A short tour of the main things. You can leave it any time, and replay it later with the Tutorial button at the top.',
-  },
-  {
-    target: '.toolbar-v',
-    title: 'Tools',
-    text: 'Move, brush, eraser, line, shapes, eyedropper and text. Hover a tool to see its key. The brush and eraser show a circle of their size.',
-  },
-  {
-    target: '.layers .layer-add',
-    title: 'Layers',
-    text: 'Everything lives on its own layer: pictures, paint and text. Add one here, then drag layers up and down to change what is on top.',
+    text: 'Everything lives on its own layer: pictures, paint (layers of pixels) and text. Add one here, then drag layers up and down to change what is on top. Open picture at the top starts from a picture on your computer.',
   },
   {
     target: ['.layers .layer-row', '.layers .bin-list'],

@@ -17,7 +17,6 @@ export default function NewProjectDialog({ onCreate, onClose }) {
   const [w, setW] = useState(1920)
   const [h, setH] = useState(1080)
   const [bg, setBg] = useState('white')
-  const [what, setWhat] = useState('image') // which project the size question is for: 'image' | 'drawing'
   const pick = (i) => {
     setSize(i)
     if (SIZES[i]) {
@@ -27,7 +26,7 @@ export default function NewProjectDialog({ onCreate, onClose }) {
   }
   const create = () => {
     const color = bg === 'white' ? '#ffffff' : bg === 'black' ? '#000000' : 'transparent'
-    onCreate(what, { w: Math.min(16384, Math.max(16, Math.round(w) || 1920)), h: Math.min(16384, Math.max(16, Math.round(h) || 1080)), bg: color })
+    onCreate('image', { w: Math.min(16384, Math.max(16, Math.round(w) || 1920)), h: Math.min(16384, Math.max(16, Math.round(h) || 1080)), bg: color })
   }
   return (
     <div className="modal-bg" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
@@ -41,20 +40,10 @@ export default function NewProjectDialog({ onCreate, onClose }) {
                 <b>Video project</b>
                 <span>A timeline with clips, transitions, audio, text and export to video.</span>
               </button>
-              <button className="kind-card" onClick={() => (setWhat('image'), setStep('image'))}>
+              <button className="kind-card" onClick={() => setStep('image')}>
                 <Icon name="image" size={34} />
-                <b>Image project</b>
-                <span>Layers, painting, text, masks and effects, exported as a picture.</span>
-              </button>
-              <button className="kind-card" onClick={() => onCreate('picture')}>
-                <Icon name="image" size={34} />
-                <b>Edit a picture</b>
-                <span>Open a picture from your computer to paint on, add layers to, and save again.</span>
-              </button>
-              <button className="kind-card" onClick={() => (setWhat('drawing'), setStep('image'))}>
-                <Icon name="pen" size={34} />
-                <b>Drawing</b>
-                <span>Draw and paint with pen pressure, brushes (Krita packs too), shapes and layers.</span>
+                <b>Picture project</b>
+                <span>Layers, drawing and painting with pen pressure and brushes, text, masks and effects, exported as a picture.</span>
               </button>
             </div>
             <div className="btn-row" style={{ justifyContent: 'flex-end', marginTop: 12 }}>
@@ -63,7 +52,7 @@ export default function NewProjectDialog({ onCreate, onClose }) {
           </>
         ) : (
           <>
-            <h3>{what === 'drawing' ? 'New drawing' : 'New image project'}</h3>
+            <h3>New picture project</h3>
             <div className="mtop">
               <span className="mlabel">Size</span>
               <select value={size} onChange={(e) => pick(+e.target.value)}>
@@ -89,6 +78,7 @@ export default function NewProjectDialog({ onCreate, onClose }) {
             </div>
             <div className="btn-row" style={{ justifyContent: 'flex-end', marginTop: 14 }}>
               <button onClick={() => setStep('kind')}>Back</button>
+              <button onClick={() => onCreate('picture')} title="Choose a picture file on your computer: the canvas takes its size and you can paint on it">Open a picture instead…</button>
               <button className="primary" onClick={create}>Create</button>
             </div>
           </>

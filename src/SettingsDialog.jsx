@@ -217,7 +217,7 @@ export default function SettingsDialog({ settings, setSettings, theme, setTheme,
                 <div className="set-row">
                   <div>
                     <div className="set-title">Show on Discord</div>
-                    <div className="hint left">Shows “Playing Vibe Editing Suite” and what you are doing (editing a video, drawing…) on your Discord profile while the Discord app is open.</div>
+                    <div className="hint left">Shows “Playing Vibe Editing Suite” and what you are doing (editing a video, a picture…) on your Discord profile while the Discord app is open.</div>
                   </div>
                   <label className="switch">
                     <input type="checkbox" checked={settings.discordPresence !== false} onChange={(e) => setSettings({ discordPresence: e.target.checked })} />

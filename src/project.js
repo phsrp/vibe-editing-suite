@@ -1,5 +1,7 @@
 // Project files: a .json holding the timeline and a list of the source files used.
 // Thumbnails and extracted audio are not stored; they are rebuilt when a project is opened.
+import { uid, reducer, initialState } from './state.js'
+import { rasterDataUrl, rasterRestore, loadImageUrl } from './paint/raster.js'
 
 export function serialize(state) {
   return JSON.stringify({
@@ -97,6 +99,45 @@ export function serializeImage(state) {
   })
 }
 
+// The same, with the pixels of the pixel layers (as PNG data URLs) inside: for saving. (serializeImage is the cheap version
+// used to see whether anything changed.)
+export async function serializeImageFull(state) {
+  const data = JSON.parse(serializeImage(state))
+  data.rasters = {}
+  for (const c of state.overlayClips) if (c.raster) data.rasters[c.raster.id] = await rasterDataUrl(c)
+  return JSON.stringify(data)
+}
+
+// A drawing project of an earlier version (the separate drawing editor, now part of the picture editor) as a picture project:
+// every layer becomes a pixel layer, with its opacity and visibility.
+export function convertDrawingProject(json) {
+  const d = JSON.parse(json)
+  let s = reducer(initialState, { type: 'imgNew', w: d.w, h: d.h, bg: d.bg || '#ffffff' })
+  const rasters = {}
+  const hide = []
+  for (const l of d.layers || []) {
+    const id = uid()
+    const rasterId = uid()
+    s = reducer(s, { type: 'imgAddRaster', id, rasterId, w: d.w, h: d.h, name: l.name || 'Layer' })
+    if (l.opacity != null && l.opacity < 1) s = reducer(s, { type: 'setProp', id, prop: 'opacity', value: Math.round(l.opacity * 100), t: 0 })
+    if (l.alphaLock) s = reducer(s, { type: 'setRaster', id, patch: { alphaLock: true } })
+    if (l.blend && l.blend !== 'normal') s = reducer(s, { type: 'setBlend', id, blend: l.blend })
+    if (l.visible === false) hide.push('v:' + s.overlayClips[s.overlayClips.length - 1].trackId)
+    if (l.png) rasters[rasterId] = 'data:image/png;base64,' + l.png
+  }
+  const out = JSON.parse(serializeImage({ ...s, hiddenRows: hide }))
+  out.rasters = rasters
+  return JSON.stringify(out)
+}
+
+export const isDrawingProject = (json) => {
+  try {
+    return JSON.parse(json).kind === 'drawing'
+  } catch {
+    return false
+  }
+}
+
 export async function restoreImage(json) {
   const data = JSON.parse(json)
   if (data.kind !== 'image' || !data.canvas) throw new Error('This is not an image project.')
@@ -117,10 +158,27 @@ export async function restoreImage(json) {
       media.push({ ...m, thumb: null, audioFiles: [], audioPending: false, missing: true })
     }
   }
+  // pixel layers: their pictures are put into the store under fresh ids (so two tabs never share pixels)
+  const overlay = []
+  for (const x of data.overlayClips || []) {
+    const c = { ...x, mediaId: x.mediaId ? idMap.get(x.mediaId) || x.mediaId : x.mediaId }
+    if (c.raster) {
+      const url = data.rasters && data.rasters[c.raster.id]
+      let img = null
+      if (url) {
+        try {
+          img = await loadImageUrl(url)
+        } catch {}
+      }
+      c.raster = { id: uid(), rev: 0, w: c.raster.w, h: c.raster.h, alphaLock: c.raster.alphaLock }
+      rasterRestore(c.raster, img)
+    }
+    overlay.push(c)
+  }
   return {
     canvas: data.canvas,
     media,
-    overlayClips: (data.overlayClips || []).map((x) => ({ ...x, mediaId: x.mediaId ? idMap.get(x.mediaId) || x.mediaId : x.mediaId })),
+    overlayClips: overlay,
     videoTracks: data.videoTracks || [],
     rowOrder: data.rowOrder || [],
     lockedRows: data.lockedRows || [],
@@ -133,10 +191,10 @@ export async function restoreImage(json) {
 export function kindOf(json) {
   try {
     const k = JSON.parse(json).kind
-    return k === 'image' ? 'image' : k === 'drawing' ? 'drawing' : 'video'
+    return k === 'image' || k === 'drawing' ? 'image' : 'video' // (old drawing projects open in the picture editor)
   } catch {
     return 'video'
   }
 }
 
-if (typeof window !== 'undefined') window.__vibeProject = { serialize, restore, serializeImage, restoreImage, kindOf } // used by the developer self-test
+if (typeof window !== 'undefined') window.__vibeProject = { exportImagePng: async (s) => (await import('./imageRender.js')).exportImage(s), serialize, restore, serializeImage, serializeImageFull, restoreImage, kindOf, convertDrawingProject, isDrawingProject } // used by the developer self-test

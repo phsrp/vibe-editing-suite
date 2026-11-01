@@ -182,6 +182,82 @@ vec4 sampleSrc(sampler2D t, sampler2D bl, vec2 s, vec4 tf, vec2 p, vec2 st, Fx f
 vec4 getFromColor(vec2 uv) { return sampleSrc(from, blA, sA, tfA, pA, stA, Fx(fA, c1A, c2A, kA, kcA, szA), Mk(mkA, mbA, mrA, mnA, mbbA), mpA, hA, wA, uv); }
 vec4 getToColor(vec2 uv) { return sampleSrc(to, blB, sB, tfB, pB, stB, Fx(fB, c1B, c2B, kB, kcB, szB), Mk(mkB, mbB, mrB, mnB, mbbB), mpB, hB, wB, uv); }
 `
+const BLEND_GLSL = `
+// Blend modes (picture editor layers): the layer is mixed with what is already drawn under it (dstTex, a copy of it)
+uniform sampler2D dstTex;
+uniform float bmode;
+uniform vec2 vp;
+vec3 unp(vec4 c) { return c.a > 0.0001 ? c.rgb / c.a : vec3(0.0); }
+float lumOf(vec3 c) { return dot(c, vec3(0.3, 0.59, 0.11)); }
+vec3 clipColor(vec3 c) {
+  float l = lumOf(c);
+  float n = min(min(c.r, c.g), c.b);
+  float x = max(max(c.r, c.g), c.b);
+  if (n < 0.0) c = l + (c - l) * l / max(l - n, 0.00001);
+  if (x > 1.0) c = l + (c - l) * (1.0 - l) / max(x - l, 0.00001);
+  return c;
+}
+vec3 setLum(vec3 c, float l) { return clipColor(c + (l - lumOf(c))); }
+float satOf(vec3 c) { return max(max(c.r, c.g), c.b) - min(min(c.r, c.g), c.b); }
+vec3 setSat(vec3 c, float s) {
+  float mn = min(min(c.r, c.g), c.b);
+  float mx = max(max(c.r, c.g), c.b);
+  if (mx <= mn) return vec3(0.0);
+  return (c - mn) * s / (mx - mn);
+}
+vec3 hardLight(vec3 cb, vec3 cs) {
+  vec3 m = cb * 2.0 * cs;
+  vec3 s = cb + (2.0 * cs - 1.0) - cb * (2.0 * cs - 1.0);
+  return vec3(cs.r <= 0.5 ? m.r : s.r, cs.g <= 0.5 ? m.g : s.g, cs.b <= 0.5 ? m.b : s.b);
+}
+float softD(float x) { return x <= 0.25 ? ((16.0 * x - 12.0) * x + 4.0) * x : sqrt(x); }
+float softCh(float cb, float cs) { return cs <= 0.5 ? cb - (1.0 - 2.0 * cs) * cb * (1.0 - cb) : cb + (2.0 * cs - 1.0) * (softD(cb) - cb); }
+float dodgeCh(float cb, float cs) { return cb <= 0.0 ? 0.0 : (cs >= 1.0 ? 1.0 : min(1.0, cb / (1.0 - cs))); }
+float burnCh(float cb, float cs) { return cb >= 1.0 ? 1.0 : (cs <= 0.0 ? 0.0 : 1.0 - min(1.0, (1.0 - cb) / cs)); }
+vec3 blendFn(vec3 cb, vec3 cs) {
+  if (bmode < 1.5) return cb * cs; // multiply
+  if (bmode < 2.5) return cb + cs - cb * cs; // screen
+  if (bmode < 3.5) return hardLight(cs, cb); // overlay
+  if (bmode < 4.5) return min(cb, cs); // darken
+  if (bmode < 5.5) return max(cb, cs); // lighten
+  if (bmode < 6.5) return vec3(dodgeCh(cb.r, cs.r), dodgeCh(cb.g, cs.g), dodgeCh(cb.b, cs.b));
+  if (bmode < 7.5) return vec3(burnCh(cb.r, cs.r), burnCh(cb.g, cs.g), burnCh(cb.b, cs.b));
+  if (bmode < 8.5) return hardLight(cb, cs);
+  if (bmode < 9.5) return vec3(softCh(cb.r, cs.r), softCh(cb.g, cs.g), softCh(cb.b, cs.b));
+  if (bmode < 10.5) return abs(cb - cs); // difference
+  if (bmode < 11.5) return cb + cs - 2.0 * cb * cs; // exclusion
+  if (bmode < 12.5) return setLum(setSat(cs, satOf(cb)), lumOf(cb)); // hue
+  if (bmode < 13.5) return setLum(setSat(cb, satOf(cs)), lumOf(cb)); // saturation
+  if (bmode < 14.5) return setLum(cs, lumOf(cb)); // colour
+  return setLum(cb, lumOf(cs)); // luminosity
+}
+// both premultiplied; the result is what the picture looks like with the layer on top
+vec4 blendWith(vec4 d, vec4 s) {
+  if (s.a <= 0.0001) return d;
+  vec3 B = blendFn(unp(d), unp(s));
+  return vec4((1.0 - d.a) * s.rgb + (1.0 - s.a) * d.rgb + s.a * d.a * B, s.a + d.a - s.a * d.a);
+}
+`
+// the blend modes a layer can have, in the order the shader numbers them (0 = normal)
+export const BLEND_LIST = [
+  ['normal', 'Normal'],
+  ['multiply', 'Multiply'],
+  ['screen', 'Screen'],
+  ['overlay', 'Overlay'],
+  ['darken', 'Darken'],
+  ['lighten', 'Lighten'],
+  ['color-dodge', 'Colour dodge'],
+  ['color-burn', 'Colour burn'],
+  ['hard-light', 'Hard light'],
+  ['soft-light', 'Soft light'],
+  ['difference', 'Difference'],
+  ['exclusion', 'Exclusion'],
+  ['hue', 'Hue'],
+  ['saturation', 'Saturation'],
+  ['color', 'Colour'],
+  ['luminosity', 'Luminosity'],
+]
+export const BLEND_IDS = Object.fromEntries(BLEND_LIST.map(([id], i) => [id, i]))
 const SINGLE = `vec4 transition(vec2 uv) { return getFromColor(uv); }`
 const FADE = `vec4 transition(vec2 uv) { return mix(getFromColor(uv), getToColor(uv), progress); }`
 
@@ -361,7 +437,7 @@ export function createRenderer(canvas) {
   // Returns {prog, loc, extras} or throws an Error with the compiler log.
   function build(transitionSrc) {
     const fs = gl.createShader(gl.FRAGMENT_SHADER)
-    gl.shaderSource(fs, PREFIX + '\n' + transitionSrc + '\nvoid main() { gl_FragColor = transition(_uv); }')
+    gl.shaderSource(fs, PREFIX + '\n' + BLEND_GLSL + '\n' + transitionSrc + '\nvoid main() { vec4 s = transition(_uv); gl_FragColor = bmode > 0.5 ? blendWith(texture2D(dstTex, gl_FragCoord.xy / vp), s) : s; }')
     gl.compileShader(fs)
     if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
       const log = gl.getShaderInfoLog(fs)
@@ -379,7 +455,7 @@ export function createRenderer(canvas) {
     return {
       prog,
       extras,
-      loc: { from: u('from'), to: u('to'), progress: u('progress'), ratio: u('ratio'), sA: u('sA'), sB: u('sB'), tfA: u('tfA'), tfB: u('tfB'), pA: u('pA'), pB: u('pB'), stA: u('stA'), stB: u('stB'), hA: u('hA'), hB: u('hB'), wA: u('wA'), wB: u('wB'), fA: u('fA'), fB: u('fB'), c1A: u('c1A'), c1B: u('c1B'), c2A: u('c2A'), c2B: u('c2B'), kA: u('kA'), kB: u('kB'), kcA: u('kcA'), kcB: u('kcB'), szA: u('szA'), szB: u('szB'), mkA: u('mkA'), mkB: u('mkB'), mbA: u('mbA'), mbB: u('mbB'), mrA: u('mrA'), mrB: u('mrB'), mnA: u('mnA'), mnB: u('mnB'), mpA: u('mpA'), mpB: u('mpB'), mbbA: u('mbbA'), mbbB: u('mbbB'), blA: u('blA'), blB: u('blB') },
+      loc: { from: u('from'), to: u('to'), progress: u('progress'), ratio: u('ratio'), sA: u('sA'), sB: u('sB'), tfA: u('tfA'), tfB: u('tfB'), pA: u('pA'), pB: u('pB'), stA: u('stA'), stB: u('stB'), hA: u('hA'), hB: u('hB'), wA: u('wA'), wB: u('wB'), fA: u('fA'), fB: u('fB'), c1A: u('c1A'), c1B: u('c1B'), c2A: u('c2A'), c2B: u('c2B'), kA: u('kA'), kB: u('kB'), kcA: u('kcA'), kcB: u('kcB'), szA: u('szA'), szB: u('szB'), mkA: u('mkA'), mkB: u('mkB'), mbA: u('mbA'), mbB: u('mbB'), mrA: u('mrA'), mrB: u('mrB'), mnA: u('mnA'), mnB: u('mnB'), mpA: u('mpA'), mpB: u('mpB'), mbbA: u('mbbA'), mbbB: u('mbbB'), blA: u('blA'), blB: u('blB'), dstTex: u('dstTex'), bmode: u('bmode'), vp: u('vp') },
     }
   }
 
@@ -398,6 +474,7 @@ export function createRenderer(canvas) {
     }
   }
 
+  let curBlend = 0 // the blend mode of the layer being drawn (0 = normal, see BLEND_IDS)
   function use(p, progress, sA, sB, tA, tB, dA, dB) {
     gl.useProgram(p.prog)
     gl.bindBuffer(gl.ARRAY_BUFFER, buf)
@@ -407,6 +484,9 @@ export function createRenderer(canvas) {
     gl.uniform1i(p.loc.to, 1)
     gl.uniform1i(p.loc.blA, 4)
     gl.uniform1i(p.loc.blB, 5)
+    gl.uniform1i(p.loc.dstTex, 7)
+    gl.uniform1f(p.loc.bmode, curBlend)
+    gl.uniform2f(p.loc.vp, canvas.width, canvas.height)
     gl.uniform1f(p.loc.progress, progress)
     gl.uniform1f(p.loc.ratio, canvas.width / canvas.height)
     gl.uniform2f(p.loc.sA, sA[0], sA[1])
@@ -460,6 +540,44 @@ export function createRenderer(canvas) {
     gl.bindTexture(gl.TEXTURE_2D, tex)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src)
   }
+  // Pictures that come with a version number (see paint/raster.js) get a texture of their own that stays on the graphics card:
+  // the pixels are only sent again when the version changed. Returns the texture that is bound to `unit`.
+  const texCache = new Map() // picture -> { tex, ver, used }
+  let useClock = 0
+  function bindPicture(unit, shared, src, ver) {
+    if (ver === undefined) {
+      upload(unit, shared, src)
+      return shared
+    }
+    let c = texCache.get(src)
+    if (!c) {
+      const tex = gl.createTexture()
+      gl.activeTexture(gl.TEXTURE0 + unit)
+      gl.bindTexture(gl.TEXTURE_2D, tex)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      c = { tex, ver: null, used: 0 }
+      texCache.set(src, c)
+      if (texCache.size > 24) {
+        let oldest = null
+        for (const [k, v] of texCache) if (k !== src && (!oldest || v.used < oldest[1].used)) oldest = [k, v]
+        if (oldest) {
+          gl.deleteTexture(oldest[1].tex)
+          texCache.delete(oldest[0])
+        }
+      }
+    }
+    gl.activeTexture(gl.TEXTURE0 + unit)
+    gl.bindTexture(gl.TEXTURE_2D, c.tex)
+    if (c.ver !== ver) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, src)
+      c.ver = ver
+    }
+    c.used = ++useClock
+    return c.tex
+  }
 
   // bg = [r, g, b, a] (0..1, premultiplied): the image editor's background; a video's is black
   function clear(bg) {
@@ -471,11 +589,13 @@ export function createRenderer(canvas) {
 
   // Draw one layer on top of what is already there. A, B: {el, w, h, tf, warp}. tf / warp = the clip's
   // motion at this moment (see motion.js). B and name are optional.
-  function drawLayer(A, B, name, progress) {
+  function drawLayer(A, B, name, progress, blend) {
     if (!A) return
+    let tA0
+    let tB0
     try {
-      upload(0, texA, A.el)
-      if (B) upload(1, texB, B.el)
+      tA0 = bindPicture(0, texA, A.el, A.ver)
+      if (B) tB0 = bindPicture(1, texB, B.el, B.ver)
     } catch {
       return
     }
@@ -483,14 +603,21 @@ export function createRenderer(canvas) {
     const tA = shaderTransform(A.tf, A.warp, A.fx, A.mask)
     const tBB = B ? shaderTransform(B.tf, B.warp, B.fx, B.mask) : null
     // blurred copies of the pictures that have a blur (made first; the layer's shader then reads them)
-    const bA = tA.fu.f[0] > 0.004 ? blurPass(texA, A.w, A.h, blurSigma(tA.fu.f[0], A.w, A.h), 'A') : null
-    const bB = B && tBB.fu.f[0] > 0.004 ? blurPass(texB, B.w, B.h, blurSigma(tBB.fu.f[0], B.w, B.h), 'B') : null
+    const bA = tA.fu.f[0] > 0.004 ? blurPass(tA0, A.w, A.h, blurSigma(tA.fu.f[0], A.w, A.h), 'A') : null
+    const bB = B && tBB.fu.f[0] > 0.004 ? blurPass(tB0, B.w, B.h, blurSigma(tBB.fu.f[0], B.w, B.h), 'B') : null
     gl.activeTexture(gl.TEXTURE4)
     gl.bindTexture(gl.TEXTURE_2D, bA || blurDummyA)
     gl.activeTexture(gl.TEXTURE5)
     gl.bindTexture(gl.TEXTURE_2D, bB || blurDummyB)
-    gl.enable(gl.BLEND)
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+    curBlend = blend || 0
+    if (curBlend) {
+      // a blend mode needs to see what is under the layer: a copy of the picture so far, which the shader mixes the layer into
+      snapshotDst()
+      gl.disable(gl.BLEND)
+    } else {
+      gl.enable(gl.BLEND)
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+    }
     if (B) {
       const p = lib.get(name) || fade
       use(p, Math.min(1, Math.max(0, progress)), sA, scaleFor(B.w, B.h), tA, tBB, [A.w, A.h], [B.w, B.h])
@@ -499,6 +626,28 @@ export function createRenderer(canvas) {
     }
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
   }
+  // a copy of the picture drawn so far (the canvas) in a texture of its own, for the blend modes
+  let dstCopy = null
+  function snapshotDst() {
+    const w = canvas.width
+    const h = canvas.height
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    gl.activeTexture(gl.TEXTURE7)
+    if (!dstCopy || dstCopy.w !== w || dstCopy.h !== h) {
+      if (dstCopy) gl.deleteTexture(dstCopy.tex)
+      const tex = gl.createTexture()
+      gl.bindTexture(gl.TEXTURE_2D, tex)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST)
+      gl.copyTexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 0, 0, w, h, 0)
+      dstCopy = { tex, w, h }
+    } else {
+      gl.bindTexture(gl.TEXTURE_2D, dstCopy.tex)
+      gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 0, 0, w, h)
+    }
+  }
   function render(A, B, name, progress) {
     clear()
     drawLayer(A, B, name, progress)
@@ -506,7 +655,7 @@ export function createRenderer(canvas) {
   // layers: bottom to top, each {A, B?, name?, progress?}
   function renderLayers(layers, bg) {
     clear(bg)
-    for (const l of layers) drawLayer(l.A, l.B, l.name, l.progress)
+    for (const l of layers) drawLayer(l.A, l.B, l.name, l.progress, l.blend)
   }
 
   // Copy the current frame (RGBA, bottom row first) into buf: used when exporting.

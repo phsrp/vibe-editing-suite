@@ -17,7 +17,7 @@ const len = (s) => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
-export default function Home({ active, onNew, onOpen, onOpenRecent }) {
+export default function Home({ active, onNew, onOpen, onOpenPicture, onOpenRecent }) {
   const [recents, setRecents] = useState(null)
   const load = () => window.api.recentList().then(setRecents)
   useEffect(() => {
@@ -48,6 +48,9 @@ export default function Home({ active, onNew, onOpen, onOpenRecent }) {
           <button className="big" onClick={onOpen}>
             <Icon name="folder" size={16} /> Open project…
           </button>
+          <button className="big" onClick={onOpenPicture} title="Open a picture from your computer in the picture editor">
+            <Icon name="image" size={16} /> Open picture…
+          </button>
           <button className="big" onClick={() => window.api.openProjectsFolder()} title="Where your projects are saved by default (Documents > Vibe Editing Suite Projects)">
             <Icon name="folder" size={16} /> Projects folder
           </button>
@@ -59,8 +62,8 @@ export default function Home({ active, onNew, onOpen, onOpenRecent }) {
           {(recents || []).map((r) => (
             <div key={r.path} className="card" onClick={() => onOpenRecent(r)} title={r.path}>
               <div className="card-thumb" style={{ backgroundImage: r.thumb ? `url("${toUrl(r.thumb)}")` : undefined }}>
-                {!r.thumb && <Icon name={r.kind === 'drawing' ? 'pen' : r.kind === 'image' ? 'image' : 'play'} size={28} />}
-                <span className={'card-badge ' + (r.kind === 'image' || r.kind === 'drawing' ? r.kind : 'video')}>{r.kind === 'image' || r.kind === 'drawing' ? r.kind : 'video'}</span>
+                {!r.thumb && <Icon name={r.kind === 'image' || r.kind === 'drawing' ? 'image' : 'play'} size={28} />}
+                <span className={'card-badge ' + (r.kind === 'image' || r.kind === 'drawing' ? 'image' : 'video')}>{r.kind === 'image' || r.kind === 'drawing' ? 'picture' : 'video'}</span>
                 <button className="card-x" onClick={(e) => remove(e, r)} title="Remove from this list (the file is not deleted)">
                   <Icon name="x" size={12} />
                 </button>

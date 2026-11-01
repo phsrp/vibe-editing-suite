@@ -161,7 +161,7 @@ export function soleVideoClip(state) {
 
 // the size of a clip's picture: a text or paint layer is as big as the frame / its own canvas, other clips are their file
 export const clipPicture = (state, clip, ratio) =>
-  clip.text ? { width: ratio * 1000, height: 1000 } : clip.paint ? { width: clip.paint.w, height: clip.paint.h } : state.media.find((m) => m.id === clip.mediaId)
+  clip.text ? { width: ratio * 1000, height: 1000 } : clip.raster ? { width: clip.raster.w, height: clip.raster.h } : clip.paint ? { width: clip.paint.w, height: clip.paint.h } : state.media.find((m) => m.id === clip.mediaId)
 
 // the video rows, bottom layer first (what gets drawn first)
 export const videoRowsBottomUp = (state) => rowKeys(state).filter((k) => k === 'main' || k.startsWith('v:')).reverse()
@@ -1494,6 +1494,41 @@ export function reducer(state, a) {
     }
     case 'imgAddPaint':
       return addImageLayer(state, { id: a.id, mediaId: null, paint: { w: state.canvas.w, h: state.canvas.h, strokes: [] } }, nextLayerName(state, 'Paint'))
+    // a layer of pixels to paint on (see paint/raster.js). The pixels are not in the state; raster.rev counts the changes made to them.
+    case 'imgAddRaster':
+      return addImageLayer(
+        state,
+        { id: a.id, mediaId: null, raster: { id: a.rasterId || uid(), rev: 0, w: a.w || state.canvas.w, h: a.h || state.canvas.h } },
+        a.name || nextLayerName(state, 'Layer'),
+      )
+    // how a layer mixes with the layers under it (see BLEND_LIST in glRenderer.js); 'normal' is the plain way
+    case 'setBlend': {
+      const f = (c) => {
+        if (c.id !== a.id) return c
+        const n = { ...c, blend: a.blend }
+        if (!a.blend || a.blend === 'normal') delete n.blend
+        return n
+      }
+      return commit(state, { overlayClips: state.overlayClips.map(f) })
+    }
+    // the pixels of this layer were changed: a new step to undo
+    case 'rasterCommit': {
+      const f = (c) => (c.id === a.id && c.raster ? { ...c, raster: { ...c.raster, rev: a.rev } } : c)
+      return commit(state, { overlayClips: state.overlayClips.map(f) })
+    }
+    // alpha lock and the like
+    case 'setRaster': {
+      const f = (c) => (c.id === a.id && c.raster ? { ...c, raster: { ...c.raster, ...a.patch } } : c)
+      return commit(state, { overlayClips: state.overlayClips.map(f) })
+    }
+    // a picture / text / old paint layer turned into pixels (they were drawn into raster `rasterId` by the editor, with move, size,
+    // mask and effects baked in), so the original look stays and the layer can be painted on
+    case 'imgRasterize': {
+      const c0 = state.overlayClips.find((x) => x.id === a.id)
+      if (!c0) return state
+      const clean = { id: c0.id, trackId: c0.trackId, in: c0.in, out: c0.out, start: c0.start, mediaId: null, raster: { id: a.rasterId, rev: 0, w: a.w, h: a.h } }
+      return commit(state, { overlayClips: state.overlayClips.map((x) => (x.id === a.id ? clean : x)) })
+    }
     case 'imgAddText':
       return addImageLayer(state, { id: a.id, mediaId: null, text: { ...TEXT_DEFAULTS, ...(a.text || {}), animIn: 'none', animOut: 'none' }, tf: a.y ? { ...DEFAULTS, y: a.y } : undefined }, nextLayerName(state, 'Text'))
     case 'imgDuplicate': {
@@ -1502,6 +1537,8 @@ export function reducer(state, a) {
       const tr = state.videoTracks.find((t) => t.id === c.trackId)
       const trackId = uid()
       const copy = { ...JSON.parse(JSON.stringify(c)), id: uid(), trackId }
+      // a copy of a pixel layer gets pixels of its own, starting as the original's are now
+      if (c.raster) copy.raster = { id: uid(), rev: 0, w: c.raster.w, h: c.raster.h, alphaLock: c.raster.alphaLock, from: { id: c.raster.id, rev: c.raster.rev || 0 } }
       const keys = rowKeys(state)
       const at = keys.indexOf('v:' + c.trackId)
       return {

@@ -313,7 +313,7 @@ function makeProxy({ file, id, duration }) {
     })
   })
 }
-// Brush packs for the drawing editor: Krita .bundle (or single .kpp) files. They are copied into the app's data folder
+// Brush packs for the painting tools of the picture editor: Krita .bundle (or single .kpp) files. They are copied into the app's data folder
 // so they are still there next time; the editor reads them from there.
 const brushDir = () => {
   const d = path.join(app.getPath('userData'), 'brushes')

@@ -1,11 +1,12 @@
 // Draws an image project (its layers, bottom to top) with the same WebGL renderer the video editor uses, so transform,
 // funny warp, effects and masks look the same. Used by the editing view and by the export.
-import { createRenderer } from './glRenderer.js'
+import { createRenderer, BLEND_IDS } from './glRenderer.js'
 import { videoRowsBottomUp, overlayLayout, toUrl } from './state.js'
 import { evalTransform, evalWarp } from './motion.js'
 import { maskAt } from './masks.js'
 import { drawText } from './textRender.js'
 import { paintCanvas } from './paint.js'
+import { rasterView } from './paint/raster.js'
 
 const images = new Map() // file path -> { img, ready }
 const loaders = new Map() // file path -> promise
@@ -72,6 +73,10 @@ export function buildLayers(state, w, h, live, onLoad) {
       drawText(el, { ...c.text, animIn: 'none', animOut: 'none' }, 50, 100)
       ew = w
       eh = h
+    } else if (c.raster) {
+      el = rasterView(c) // (the canvas of pixels, with the stroke in progress on top while one is being drawn)
+      ew = c.raster.w
+      eh = c.raster.h
     } else if (c.paint) {
       el = paintCanvas(c, live && live.id === c.id ? live.stroke : null)
       ew = c.paint.w
@@ -85,7 +90,9 @@ export function buildLayers(state, w, h, live, onLoad) {
       ew = e.img.naturalWidth
       eh = e.img.naturalHeight
     }
-    out.push({ A: { el, w: ew, h: eh, tf: evalTransform(c, 0), warp: evalWarp(c, 0), fx: c.fx, mask: maskAt(c, 0) } })
+    // ver: a picture that has a version number (a pixel layer's canvas, or a loaded picture file) is kept as a texture on the graphics card
+    const ver = c.raster ? el.__ver : c.text || c.paint ? undefined : 1
+    out.push({ A: { el, w: ew, h: eh, ver, tf: evalTransform(c, 0), warp: evalWarp(c, 0), fx: c.fx, mask: maskAt(c, 0) }, blend: BLEND_IDS[c.blend] || 0 })
   }
   return out
 }

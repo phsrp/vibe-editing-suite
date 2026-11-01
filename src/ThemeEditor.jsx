@@ -26,9 +26,10 @@ export function ThemeSample({ theme, kind = 'video' }) {
           </div>
         ) : (
           <div className="ts-bin">
-            <div className="ts-tool on">{kind === 'drawing' ? '✎' : '▭'}</div>
-            <div className="ts-tool">{kind === 'drawing' ? '◌' : '✎'}</div>
-            <div className="ts-tool">{kind === 'drawing' ? '▭' : 'T'}</div>
+            <div className="ts-tool on">✎</div>
+            <div className="ts-tool">◌</div>
+            <div className="ts-tool">▭</div>
+            <div className="ts-tool">T</div>
           </div>
         )}
         <div className="ts-stage">
@@ -43,7 +44,7 @@ export function ThemeSample({ theme, kind = 'video' }) {
             <span className="ts-dim">00:03 / 00:12</span>
           </div>
         </div>
-        {kind === 'drawing' ? (
+        {kind === 'image' ? (
           <div className="ts-insp">
             <div className="ts-colour" />
             <div className="ts-row"><span>Size</span><input type="range" defaultValue="40" tabIndex={-1} /></div>
@@ -226,15 +227,13 @@ export default function ThemeEditor({ themes, onSave, theme, setTheme, onPreview
         <div className="te-prev-title">Preview</div>
         <div className="seg">
           <button className={kind === 'video' ? 'on' : ''} onClick={() => setKind('video')}>Video editor</button>
-          <button className={kind === 'image' ? 'on' : ''} onClick={() => setKind('image')}>Image editor</button>
-          <button className={kind === 'drawing' ? 'on' : ''} onClick={() => setKind('drawing')}>Drawing editor</button>
+          <button className={kind === 'image' ? 'on' : ''} onClick={() => setKind('image')}>Picture editor</button>
         </div>
         <ThemeSample theme={theNow} kind={kind} />
         <div className="hint left">A small stand-in for the editor. To see the real thing with this theme on:</div>
         <div className="te-prev-btns">
           <button onClick={() => onPreview('video', theNow)}>See it in the video editor</button>
-          <button onClick={() => onPreview('image', theNow)}>See it in the image editor</button>
-          <button onClick={() => onPreview('drawing', theNow)}>See it in the drawing editor</button>
+          <button onClick={() => onPreview('image', theNow)}>See it in the picture editor</button>
         </div>
       </div>
     </div>

@@ -3,7 +3,9 @@ import { soleVideoClip, overlayLayout, aspectRatio, clipPicture, isLocked } from
 import { PROPS, evalProp } from './motion.js'
 import { CC_SLIDERS, CC_DEFAULTS, CC_PRESETS } from './effects.js'
 import { TextPanel, MaskPanel, EffectsPanel, FxSlider, Section } from './Inspector.jsx'
-import { PAINT_TOOLS } from './ImagePreview.jsx'
+import { PaintPanel } from './paint/PaintPanels.jsx'
+import { BLEND_LIST } from './glRenderer.js'
+import { PIXEL_TOOLS } from './paint/usePaintKit.js'
 
 const SIZES = [
   { label: 'Square 1080', w: 1080, h: 1080 },
@@ -13,38 +15,6 @@ const SIZES = [
   { label: '4K 3840×2160', w: 3840, h: 2160 },
   { label: 'A4 2480×3508', w: 2480, h: 3508 },
 ]
-
-// the settings of the brush / eraser / shape tools
-function BrushPanel({ tool, brush, setBrush }) {
-  const set = (patch) => setBrush({ ...brush, ...patch })
-  const shape = tool === 'rect' || tool === 'ellipse'
-  return (
-    <Section id="brush" title={tool === 'eraser' ? 'Eraser' : tool === 'eyedropper' ? 'Eyedropper' : 'Brush'}>
-      {tool === 'eyedropper' ? (
-        <div className="hint left">Click the picture to pick up a colour. It becomes the brush colour.</div>
-      ) : (
-        <>
-          {tool !== 'eraser' && (
-            <div className="mtop">
-              <span className="mlabel">Colour</span>
-              <input type="color" value={brush.color} onChange={(e) => set({ color: e.target.value })} />
-            </div>
-          )}
-          <FxSlider label={shape || tool === 'line' ? 'Line width (pixels)' : 'Size (pixels)'} value={brush.size} min={1} max={300} onChange={(v) => set({ size: v })} />
-          <FxSlider label="Opacity" value={Math.round(brush.opacity * 100)} min={1} max={100} onChange={(v) => set({ opacity: v / 100 })} />
-          {(tool === 'brush' || tool === 'eraser') && <FxSlider label="Softness of the edge" value={Math.round((1 - brush.hardness) * 100)} min={0} max={100} onChange={(v) => set({ hardness: 1 - v / 100 })} />}
-          {shape && (
-            <label className="chk">
-              <input type="checkbox" checked={!!brush.fill} onChange={(e) => set({ fill: e.target.checked })} />
-              Filled shape
-            </label>
-          )}
-          <div className="hint left">Paint on a Paint layer. If none is chosen, one is made when you start painting. Undo takes back a stroke.</div>
-        </>
-      )}
-    </Section>
-  )
-}
 
 // Position, scale, stretch, rotation and opacity of a layer (no keyframes in the image editor)
 function TransformPanel({ clip, dispatch, mode, setMode, freeMode, setFreeMode, fill }) {
@@ -111,7 +81,7 @@ function ColourPanel({ clip, dispatch }) {
   )
 }
 
-export default function ImageInspector({ state, dispatch, mode, setMode, freeMode, setFreeMode, tool, brush, setBrush, open = true, setOpen }) {
+export default function ImageInspector({ state, dispatch, mode, setMode, freeMode, setFreeMode, tool, kit, sel, selActions, layerActions, open = true, setOpen }) {
   const id = soleVideoClip(state)
   const clip = id && overlayLayout(state.overlayClips).find((c) => c.id === id)
   const ratio = aspectRatio(state)
@@ -120,7 +90,7 @@ export default function ImageInspector({ state, dispatch, mode, setMode, freeMod
   const fill = pw ? 100 * Math.max(ratio / pw, pw / ratio) : null
   const set = (patch) => dispatch({ type: 'setCanvas', patch })
   const locked = !!clip && isLocked(state, clip.id)
-  const paintTool = PAINT_TOOLS.includes(tool) || tool === 'eyedropper'
+  const paintTool = PIXEL_TOOLS.includes(tool) || tool === 'eyedropper'
 
   return (
     <aside className={'inspector' + (open ? '' : ' collapsed')}>
@@ -137,8 +107,8 @@ export default function ImageInspector({ state, dispatch, mode, setMode, freeMod
         </span>
       </div>
       <div className="insp-body">
-        {paintTool && <BrushPanel tool={tool} brush={brush} setBrush={setBrush} />}
-        {!clip && (
+        {paintTool && <PaintPanel tool={tool} kit={kit} sel={sel} selActions={selActions} />}
+        {!paintTool && !clip && (
           <Section id="canvas" title="Canvas">
             <div className="mtop btnrow">
               <label className="mlabel">Width</label>
@@ -166,19 +136,43 @@ export default function ImageInspector({ state, dispatch, mode, setMode, freeMod
             <div className="hint left">Pictures keep their shape inside the canvas. Click a layer on the left to edit it.</div>
           </Section>
         )}
-        {state.selection.length > 1 && !clip && <div className="hint">{state.selection.length} layers selected.</div>}
-        {clip && (
+        {!paintTool && state.selection.length > 1 && !clip && <div className="hint">{state.selection.length} layers selected.</div>}
+        {!paintTool && clip && (
           <fieldset disabled={locked} className="lock-fs">
-            <div className="insp-clip">{clip.text ? 'Text layer' : clip.paint ? 'Paint layer' : 'Picture layer'}</div>
+            <div className="insp-clip">{clip.text ? 'Text layer' : clip.raster || clip.paint ? 'Paint layer' : 'Picture layer'}</div>
             {locked && <div className="hint warn">This layer is locked. Unlock it in the Layers panel to change it.</div>}
+            <div className="mtop">
+              <span className="mlabel">Blend mode</span>
+              <select value={clip.blend || 'normal'} onChange={(e) => dispatch({ type: 'setBlend', id: clip.id, blend: e.target.value })} title="How this layer mixes with the layers under it">
+                {BLEND_LIST.map(([id, label]) => (
+                  <option key={id} value={id}>{label}</option>
+                ))}
+              </select>
+            </div>
             {clip.text && <TextPanel clip={clip} dispatch={dispatch} noAnim />}
+            {clip.raster && (
+              <Section id="rasterlayer" title="Paint layer" defaultOpen>
+                <div className="hint left">A layer of pixels: paint on it with the brush, eraser, smudge, shapes and fill. It can still be moved, resized, turned, masked and given effects like any other layer.</div>
+                <label className="chk">
+                  <input type="checkbox" checked={!!clip.raster.alphaLock} onChange={(e) => dispatch({ type: 'setRaster', id: clip.id, patch: { alphaLock: e.target.checked } })} />
+                  Alpha lock (paint only where there already is paint)
+                </label>
+                <button className="mini wide" onClick={() => layerActions.clear(clip)}>Clear this layer</button>
+              </Section>
+            )}
+            {!clip.raster && !clip.paint && (
+              <Section id="makepixels" title="Paint on this layer">
+                <div className="hint left">To smudge, fill or select parts of {clip.text ? 'this text' : 'this picture'}, turn it into pixels first. Its move, size, mask and effects are baked in, and it cannot be edited as {clip.text ? 'text' : 'a picture'} afterwards.</div>
+                <button className="mini wide" onClick={() => layerActions.rasterize(clip)}>Turn into pixels</button>
+              </Section>
+            )}
             {clip.paint && (
               <Section id="paintlayer" title="Paint layer">
                 <div className="hint left">{clip.paint.strokes.length} stroke{clip.paint.strokes.length === 1 ? '' : 's'}. Choose a brush, the eraser or a shape on the left, then paint on the picture.</div>
                 <button className="mini wide" disabled={!clip.paint.strokes.length} onClick={() => dispatch({ type: 'paintClear', id: clip.id })}>Clear this layer</button>
               </Section>
             )}
-            <TransformPanel clip={clip} dispatch={dispatch} mode={mode} setMode={setMode} freeMode={freeMode} setFreeMode={setFreeMode} fill={clip.paint || clip.text ? null : fill} />
+            <TransformPanel clip={clip} dispatch={dispatch} mode={mode} setMode={setMode} freeMode={freeMode} setFreeMode={setFreeMode} fill={clip.paint || clip.raster || clip.text ? null : fill} />
             <MaskPanel clip={clip} dispatch={dispatch} mode={mode} setMode={setMode} still />
             <EffectsPanel clip={clip} dispatch={dispatch} />
             <ColourPanel clip={clip} dispatch={dispatch} />

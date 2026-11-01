@@ -1,6 +1,22 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Icon from './Icon.jsx'
-import { rowKeys, overlayLayout, toUrl } from './state.js'
+import { rowKeys, overlayLayout, toUrl, uid } from './state.js'
+import { rasterEntry } from './paint/raster.js'
+
+// a small picture of a layer of pixels (looked at again when its pixels change)
+function RasterThumb({ clip }) {
+  const ref = useRef(null)
+  useEffect(() => {
+    const cv = ref.current
+    if (!cv) return
+    const e = rasterEntry(clip)
+    const g = cv.getContext('2d')
+    g.clearRect(0, 0, cv.width, cv.height)
+    const k = Math.min(cv.width / e.w, cv.height / e.h)
+    g.drawImage(e.canvas, (cv.width - e.w * k) / 2, (cv.height - e.h * k) / 2, e.w * k, e.h * k)
+  }, [clip.raster.rev, clip.raster.id])
+  return <canvas ref={ref} width={44} height={30} className="dr-lthumb" />
+}
 
 // The layers of an image project, top layer first. Click to choose, drag to reorder, double-click a name to rename.
 export default function LayersPanel({ state, dispatch, open, setOpen, onAddPicture, busy }) {
@@ -30,7 +46,7 @@ export default function LayersPanel({ state, dispatch, open, setOpen, onAddPictu
       </div>
       <div className="btn-row layer-add">
         <button className="mini wide" onClick={onAddPicture} disabled={busy} title="Add a picture from your computer as a new layer">+ Picture</button>
-        <button className="mini wide" onClick={() => dispatch({ type: 'imgAddPaint' })} title="Add an empty layer to paint on">+ Paint</button>
+        <button className="mini wide" onClick={() => dispatch({ type: 'imgAddRaster', id: uid(), rasterId: uid() })} title="Add an empty layer of pixels to paint on">+ Layer</button>
         <button className="mini wide" onClick={() => dispatch({ type: 'imgAddText' })} title="Add a text layer">+ Text</button>
       </div>
       <div className="bin-list">
@@ -39,7 +55,7 @@ export default function LayersPanel({ state, dispatch, open, setOpen, onAddPictu
           const m = state.media.find((x) => x.id === clip.mediaId)
           const hidden = (state.hiddenRows || []).includes(key)
           const locked = (state.lockedRows || []).includes(key)
-          const kind = clip.text ? 'T' : clip.paint ? 'pen' : 'img'
+          const kind = clip.text ? 'T' : clip.paint || clip.raster ? 'pen' : 'img'
           return (
             <div
               key={key}
@@ -66,10 +82,14 @@ export default function LayersPanel({ state, dispatch, open, setOpen, onAddPictu
               <button className={'lyr-btn' + (hidden ? ' on' : '')} title={hidden ? 'Show this layer' : 'Hide this layer'} onClick={(e) => { e.stopPropagation(); dispatch({ type: 'toggleRowHide', key }) }}>
                 <Icon name={hidden ? 'eyeOff' : 'eye'} size={13} />
               </button>
-              <div className="lyr-thumb" style={{ backgroundImage: m && m.thumb ? `url("${toUrl(m.thumb)}")` : undefined }}>
-                {kind === 'T' && <b>T</b>}
-                {kind === 'pen' && <Icon name="wand" size={14} />}
-              </div>
+              {clip.raster ? (
+                <RasterThumb clip={clip} />
+              ) : (
+                <div className="lyr-thumb" style={{ backgroundImage: m && m.thumb ? `url("${toUrl(m.thumb)}")` : undefined }}>
+                  {kind === 'T' && <b>T</b>}
+                  {kind === 'pen' && <Icon name="wand" size={14} />}
+                </div>
+              )}
               {edit === clip.id ? (
                 <input
                   className="lyr-name-in"
