@@ -21,6 +21,39 @@ export function sequenceWords(state) {
   return out.sort((a, b) => a.start - b.start)
 }
 
+// the time to cut for a run of words: from just before the first to just after the last, never into the neighbours
+export function wordsRange(words, i0, i1) {
+  const prev = words[i0 - 1]
+  const next = words[i1 + 1]
+  const t0 = Math.max(words[i0].start - 0.03, prev ? (prev.end + words[i0].start) / 2 : 0)
+  const t1 = Math.min(words[i1].end + 0.03, next ? (words[i1].end + next.start) / 2 : Infinity)
+  return [t0, t1]
+}
+// filler words: neighbours that are both fillers are one cut
+export function fillerRanges(words) {
+  const out = []
+  for (let i = 0; i < words.length; i++) {
+    if (!words[i].filler) continue
+    let j = i
+    while (words[j + 1] && words[j + 1].filler && words[j + 1].clip === words[i].clip) j++
+    out.push(wordsRange(words, i, j))
+    i = j
+  }
+  return out
+}
+// pauses: the silence between two words, longer than minPause; a little air is kept
+const KEEP = 0.15
+export function pauseRanges(words, minPause) {
+  const out = []
+  for (let i = 0; i + 1 < words.length; i++) {
+    const p = words[i]
+    const q = words[i + 1]
+    const gap = q.start - p.end
+    if (gap > minPause && gap > 2 * KEEP + 0.05) out.push([p.end + KEEP, q.start - KEEP])
+  }
+  return out
+}
+
 export default function TranscriptDialog({ state, dispatch, onClose }) {
   const words = useMemo(() => sequenceWords(state), [state.clips, state.transcripts])
   const [a, setA] = useState(null) // selected run of words: indexes a..b
@@ -40,14 +73,6 @@ export default function TranscriptDialog({ state, dispatch, onClose }) {
     }
   }
 
-  // the time to cut for a run of words: from just before the first to just after the last, never into the neighbours
-  const rangeOf = (i0, i1) => {
-    const prev = words[i0 - 1]
-    const next = words[i1 + 1]
-    const t0 = Math.max(words[i0].start - 0.03, prev ? (prev.end + words[i0].start) / 2 : 0)
-    const t1 = Math.min(words[i1].end + 0.03, next ? (words[i1].end + next.start) / 2 : Infinity)
-    return [t0, t1]
-  }
   const cut = (ranges, what) => {
     if (!ranges.length) {
       setMsg('Nothing to remove.')
@@ -61,34 +86,10 @@ export default function TranscriptDialog({ state, dispatch, onClose }) {
   }
   const deleteSelected = () => {
     if (lo == null) return
-    cut([rangeOf(lo, hi)], picked.length === 1 ? 'the word' : `${picked.length} words`)
-  }
-  // filler words: neighbours that are both fillers are one cut
-  const fillerRanges = () => {
-    const out = []
-    for (let i = 0; i < words.length; i++) {
-      if (!words[i].filler) continue
-      let j = i
-      while (words[j + 1] && words[j + 1].filler && words[j + 1].clip === words[i].clip) j++
-      out.push(rangeOf(i, j))
-      i = j
-    }
-    return out
-  }
-  // pauses: the silence between two words, longer than minPause; a little air is kept
-  const KEEP = 0.15
-  const pauseRanges = () => {
-    const out = []
-    for (let i = 0; i + 1 < words.length; i++) {
-      const p = words[i]
-      const q = words[i + 1]
-      const gap = q.start - p.end
-      if (gap > minPause && gap > 2 * KEEP + 0.05) out.push([p.end + KEEP, q.start - KEEP])
-    }
-    return out
+    cut([wordsRange(words, lo, hi)], picked.length === 1 ? 'the word' : `${picked.length} words`)
   }
   const fillers = words.filter((w) => w.filler).length
-  const pauses = pauseRanges().length
+  const pauses = pauseRanges(words, minPause).length
 
   return (
     <div className="modal-bg" onClick={onClose}>
@@ -117,11 +118,11 @@ export default function TranscriptDialog({ state, dispatch, onClose }) {
           <button className="primary" disabled={lo == null} onClick={deleteSelected}>
             Delete {picked.length > 1 ? `${picked.length} words` : 'word'}
           </button>
-          <button disabled={!fillers} onClick={() => cut(fillerRanges(), `${fillers} filler word${fillers === 1 ? '' : 's'}`)} title="Removes every um, uh, erm, hmm">
+          <button disabled={!fillers} onClick={() => cut(fillerRanges(words), `${fillers} filler word${fillers === 1 ? '' : 's'}`)} title="Removes every um, uh, erm, hmm">
             Remove filler words ({fillers})
           </button>
           <span className="tr-pause">
-            <button disabled={!pauses} onClick={() => cut(pauseRanges(), `${pauses} pause${pauses === 1 ? '' : 's'}`)} title="Shortens every silence between words that is longer than this">
+            <button disabled={!pauses} onClick={() => cut(pauseRanges(words, minPause), `${pauses} pause${pauses === 1 ? '' : 's'}`)} title="Shortens every silence between words that is longer than this">
               Shorten pauses ({pauses})
             </button>
             <span>longer than</span>

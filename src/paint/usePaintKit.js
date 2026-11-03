@@ -133,17 +133,17 @@ export function usePaintKit(flash) {
     }
   }, [packs.length])
   const [busy, setBusy] = useState(false)
-  const importPacks = async () => {
+  const importPacks = async (paths) => {
     setBusy(true)
     try {
-      await window.api.brushesImport()
+      await window.api.brushesImport(Array.isArray(paths) ? paths : undefined)
       setPacks(await loadPacks())
     } finally {
       setBusy(false)
     }
   }
-  const removePack = async (p) => {
-    if (!window.confirm(`Remove "${p.title || p.file}" from the editor? (your original file is not touched)`)) return
+  const removePack = async (p, sure) => {
+    if (!sure && !window.confirm(`Remove "${p.title || p.file}" from the editor? (your original file is not touched)`)) return
     await window.api.brushesDelete(p.file)
     packCache.delete(p.file)
     setPacks(await loadPacks())

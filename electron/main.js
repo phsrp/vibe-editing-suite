@@ -326,9 +326,10 @@ const brushFiles = () =>
     .filter((f) => /\.(bundle|zip|kpp)$/i.test(f))
     .map((f) => ({ name: f, size: fs.statSync(path.join(brushDir(), f)).size }))
 ipcMain.handle('brushes:list', () => brushFiles())
-ipcMain.handle('brushes:import', async () => {
-  let files
-  if (process.env.VIBE_SELFTEST && process.env.VIBE_TEST_BRUSHES) files = process.env.VIBE_TEST_BRUSHES.split(';').filter(Boolean)
+ipcMain.handle('brushes:import', async (_e, paths) => {
+  let files = paths
+  if (files) files = files.map(String)
+  else if (process.env.VIBE_SELFTEST && process.env.VIBE_TEST_BRUSHES) files = process.env.VIBE_TEST_BRUSHES.split(';').filter(Boolean)
   else {
     const res = await dialog.showOpenDialog(mainWindow, {
       title: 'Choose Krita brush packs',
@@ -499,6 +500,12 @@ ipcMain.handle('transitions:list', () => {
 })
 
 ipcMain.handle('transitions:openFolder', () => shell.openPath(transitionsDir()))
+ipcMain.handle('transitions:write', (_e, { name, source }) => {
+  const safe = String(name).replace(/[^\w -]/g, '').trim()
+  if (!safe) throw new Error('That name cannot be used.')
+  fs.writeFileSync(path.join(transitionsDir(), safe + '.glsl'), String(source), 'utf8')
+  return safe
+})
 
 let mainWindow = null
 let dirty = false
@@ -631,9 +638,13 @@ ipcMain.handle('library:add', async () => {
     filters: [{ name: 'Videos, images and audio', extensions: [...VIDEO_EXT, ...IMAGE_EXT.map((e) => e.slice(1)), ...AUDIO_EXT] }],
   })
   if (r.canceled) return 0
+  return copyToLibrary(r.filePaths)
+})
+ipcMain.handle('library:addPaths', (_e, paths) => copyToLibrary(paths.map(String)))
+function copyToLibrary(files) {
   const dir = libraryDir()
   let n = 0
-  for (const src of r.filePaths) {
+  for (const src of files) {
     const ext = path.extname(src)
     const base = path.basename(src, ext)
     let dest = path.join(dir, base + ext)
@@ -644,7 +655,7 @@ ipcMain.handle('library:add', async () => {
     } catch {}
   }
   return n
-})
+}
 
 ipcMain.handle('project:save', async (_e, { file, json, defaultName }) => {
   let target = file
@@ -673,8 +684,8 @@ ipcMain.handle('project:open', async () => {
 })
 
 // The image editor: save the finished picture (bytes from the page) where the user picks, and small thumbnails for Recent projects
-ipcMain.handle('image:save', async (_e, { data, name, ext }) => {
-  let target = process.env.VIBE_TEST_OUT
+ipcMain.handle('image:save', async (_e, { data, name, ext, file }) => {
+  let target = file || process.env.VIBE_TEST_OUT
   if (!target) {
     const r = await dialog.showSaveDialog(mainWindow, {
       title: 'Save the picture',
@@ -1120,8 +1131,8 @@ ipcMain.handle('audio:pcm16k', async (_e, { file, stream, start, dur }) => {
   })
 })
 // save the subtitles file (.srt)
-ipcMain.handle('subtitles:save', async (_e, { name, text }) => {
-  const res = process.env.VIBE_SELFTEST && process.env.VIBE_TEST_OUT ? { canceled: false, filePath: process.env.VIBE_TEST_OUT } : await dialog.showSaveDialog(mainWindow, { defaultPath: path.join(projectsDir(), (name || 'Subtitles') + '.srt'), filters: [{ name: 'Subtitles', extensions: ['srt'] }] })
+ipcMain.handle('subtitles:save', async (_e, { name, text, file }) => {
+  const res = file ? { canceled: false, filePath: file } : process.env.VIBE_SELFTEST && process.env.VIBE_TEST_OUT ? { canceled: false, filePath: process.env.VIBE_TEST_OUT } : await dialog.showSaveDialog(mainWindow, { defaultPath: path.join(projectsDir(), (name || 'Subtitles') + '.srt'), filters: [{ name: 'Subtitles', extensions: ['srt'] }] })
   if (res.canceled || !res.filePath) return null
   fs.writeFileSync(res.filePath, '﻿' + text, 'utf8')
   return res.filePath

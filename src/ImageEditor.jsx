@@ -5,7 +5,7 @@ import ImageInspector from './ImageInspector.jsx'
 import LayersPanel from './LayersPanel.jsx'
 import Icon from './Icon.jsx'
 import { serializeImage, serializeImageFull, restoreImage, convertDrawingProject, isDrawingProject } from './project.js'
-import { exportImage, buildLayers, backgroundOf, makeImageRenderer, imagesReady } from './imageRender.js'
+import { exportImage, buildLayers, backgroundOf, makeImageRenderer, freeRenderer, imagesReady } from './imageRender.js'
 import { actionFor } from './keybinds.js'
 import Tour, { tourSeen, markTourSeen } from './Tour.jsx'
 import { IMAGE_STEPS } from './tourSteps.js'
@@ -148,6 +148,7 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
         r.renderLayers(buildLayers(one, w, h), [0, 0, 0, 0])
         const rid = uid()
         rasterFromCanvas(rid, w, h, cv)
+        freeRenderer(cv)
         dispatch({ type: 'imgRasterize', id: clip.id, rasterId: rid, w, h })
         flash('The layer is now pixels: you can paint, smudge and select on it.')
       } catch (e) {
@@ -259,10 +260,10 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
       setBusy(false)
     }
   }
-  const saveProject = async (asNew) => {
+  const saveProject = async (asNew, to) => {
     const s = stateRef.current
     const json = serializeImage(s)
-    const file = await window.api.saveProject(asNew ? null : projectRef.current, await serializeImageFull(s), `${projectName === 'Untitled' ? 'My picture' : projectName}.json`)
+    const file = await window.api.saveProject(to || (asNew ? null : projectRef.current), await serializeImageFull(s), `${projectName === 'Untitled' ? 'My picture' : projectName}.json`)
     if (!file) return false
     setProjectPath(file)
     savedJson.current = json
@@ -281,9 +282,20 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
     }
   }, [])
   useEffect(() => {
-    registerHandle(tabId, { save: () => saveProject(false), isDirty: () => dirtyRef.current, getState: () => stateRef.current, dispatch })
+    registerHandle(tabId, { kind: 'image', save: () => saveProject(false), saveAs: (to) => saveProject(false, to), isDirty: () => dirtyRef.current, getState: () => stateRef.current, dispatch, live: () => liveRef.current })
     return () => registerHandle(tabId, null)
   }, [])
+  // what the AI connection works with (fresh on every render)
+  const liveRef = useRef(null)
+  liveRef.current = {
+    kit,
+    addPictures,
+    layerActions,
+    sel: () => selRef.current,
+    setSel,
+    pixelClip: () => pixelClip,
+    setPixelClip: (c) => (pixelClip = c),
+  }
   useEffect(() => {
     onMeta(tabId, { title: projectName, path: projectPath, dirty, kind: 'image' })
   }, [projectName, projectPath, dirty])

@@ -1,4 +1,7 @@
-- The AI connection's "Allow" question now matches the editor's look, and comes to the front when an AI app asks
-- Fixed: the Copy buttons in the AI connection setup guide did nothing
-- Fixed: the Claude Code setup command had its parts in the wrong order and gave an error
-- The setup guide and the GitHub page now explain what to do if "claude" is not recognized, and what the AI can do
+- AI connection: an AI app can now use nearly the whole editor, in video and picture projects: over 100 things, from cutting and colour to captions, tracking and exporting
+- It can make pictures from scratch: layers, gradients, shapes, glows, cut-outs and real brushes, and it can look at a picture on your PC to copy its style
+- Ask "zoom in and track that person" and it follows them with normal keyframes you can edit
+- Long jobs show their progress with a Cancel button, and it still asks you first before anything like saving, exporting or using the microphone
+- Undo now covers markers: adding, removing, renaming and dragging them, and it puts them back after Edit by text cuts a section out
+- Fixed: AI apps were told that positive Position Y moves things up, when it moves them down
+- Fixed: saving picture projects again and again could slowly use up the editor's graphics, and could cost it the preview

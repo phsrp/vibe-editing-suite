@@ -27,15 +27,24 @@ A Windows video editor and picture editor focused on simplicity with many featur
 
 ## Connect an AI app (MCP)
 
-An AI app on your PC, such as Claude, can read your timeline and edit it for you while the editor is open. It uses [MCP](https://modelcontextprotocol.io), an open standard for connecting AI apps to programs. It is off until you turn it on.
+An AI app on your PC, such as Claude, can use the whole editor for you while it is open: video and pictures. It uses [MCP](https://modelcontextprotocol.io), an open standard for connecting AI apps to programs. It is off until you turn it on.
 
 1. Open **Settings > AI connection** and turn the switch on.
 2. Copy the text from the setup guide on that page into your AI app. For Claude Desktop that is Settings > Developer > Edit Config, then restart it. For Claude Code it is one command. If you use Claude Code inside the Claude desktop app, paste that command into a Code chat and ask Claude to add it.
-3. Open a video project, start a new chat in your AI app and ask something like "look at my timeline and add a title at the start".
+3. Start a new chat in your AI app and ask something like "look at my timeline and add a title at the start", or "make a thumbnail in the style of this picture".
 
-**What it can do:** read your project and see the picture at any moment, add clips and text, move, trim, split and delete clips, set keyframes, transitions, effects and volume, add markers, and undo or redo.
+**What it can do:** nearly everything you can do with the mouse.
 
-You see every change as it happens, and Ctrl+Z takes it back. The editor asks you first before it deletes clips, adds files or saves, and it can only open the Export tab, not start an export. It works with video projects for now.
+- **Video:** see the picture at any moment, and cut, trim, move and arrange clips and tracks, with text, keyframes, speed, transitions, effects, colour, green screen, masks, sound clean-up and markers. It can also write new transitions.
+- **Tracking:** "zoom in and track that person" follows them with normal keyframes you can edit, and masks can follow a subject too.
+- **Captions and speech:** make captions from speech, cut words, filler words and pauses out by text, save subtitles.
+- **Pictures:** make thumbnails and posters with layers, blend modes, gradients, shapes and glows, cut a subject out of its background, paint with real brushes, make selections, and look at a picture on your PC to copy its style.
+- **Finishing:** save projects, go back to earlier versions, and export videos and pictures, with long jobs showing their progress and a Cancel button.
+- **The editor itself:** open and switch projects, and change settings, themes and shortcuts.
+
+Tracking and smart cut-outs use the tracking AI model, and captions use the speech model. If one is missing, the AI can download it after you allow it.
+
+You see every change as it happens, and Ctrl+Z takes it back. The editor asks you first before it deletes clips, opens or adds files, saves or exports, changes a setting, downloads something or uses the microphone. Things it cannot do: draw with pen pressure in real time, move the panels around, install updates.
 
 The connection only works on this PC, and any MCP app that can start a local program can use it. Open the editor first: if your AI app was started while the editor was closed, or the editor has just updated, restart the AI app or reconnect it.
 

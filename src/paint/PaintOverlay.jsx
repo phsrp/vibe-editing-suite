@@ -5,7 +5,7 @@ import { promptFromLoop } from '../smartMask.js'
 import { Stroke, Smudge, mergeBuffer, ellipsePoints, rectPoints, floodMask, maskToCanvas, objectMask, newCanvas, rgbToHex } from './engine.js'
 import { rasterEntry, rasterGrab, rasterRect, rasterView, setRasterLive } from './raster.js'
 import { makeSelection, makeMaskSelection, inSelection, liftParts, paintMoved, shiftSelection } from './selection.js'
-import { commitPixels } from './pixelOps.js'
+import { commitPixels, smudgeResult } from './pixelOps.js'
 import { PAINT_TOOLS, SELECT_TOOLS } from './usePaintKit.js'
 
 // The painting layer on top of the picture of the picture editor: the pen / mouse input of the brush, eraser, smudge, shapes,
@@ -381,27 +381,7 @@ export default function PaintOverlay({ state, dispatch, kit, tool, box, glCanvas
     else if (g.kind === 'smudge') {
       const en = g.entry
       const r = g.sm.dirty && rasterRect(en, g.sm.dirty)
-      if (r) {
-        const crop = newCanvas(r.w, r.h)
-        crop.getContext('2d').drawImage(g.before, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h)
-        const cur = selRef.current
-        // with a selection only the selected part keeps the smudge
-        if (cur) {
-          const after = rasterGrab(en, r)
-          const ag = after.getContext('2d')
-          ag.globalCompositeOperation = 'destination-in'
-          ag.drawImage(cur.mask, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h)
-          const lg = en.canvas.getContext('2d')
-          lg.clearRect(r.x, r.y, r.w, r.h)
-          lg.drawImage(g.before, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h)
-          lg.save()
-          lg.globalCompositeOperation = 'destination-out'
-          lg.drawImage(cur.mask, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h)
-          lg.restore()
-          lg.drawImage(after, r.x, r.y)
-        }
-        commitPixels(g.clip, dispatch, r, crop)
-      }
+      if (r) commitPixels(g.clip, dispatch, r, smudgeResult(en, r, g.before, selRef.current))
       onLive()
     } else if (g.kind === 'selmove') {
       if (g.moved && (g.dx || g.dy)) {

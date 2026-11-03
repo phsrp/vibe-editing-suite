@@ -242,10 +242,10 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
     }
   }
 
-  const saveProject = async (asNew) => {
+  const saveProject = async (asNew, to) => {
     const s = stateRef.current
     const json = serialize(s)
-    const file = await window.api.saveProject(asNew ? null : projectRef.current, json, `${projectName === 'Untitled' ? 'My project' : projectName}.json`)
+    const file = await window.api.saveProject(to || (asNew ? null : projectRef.current), json, `${projectName === 'Untitled' ? 'My project' : projectName}.json`)
     if (!file) return false
     setProjectPath(file)
     savedJson.current = json
@@ -265,7 +265,7 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
 
   // let the tab bar ask this project to save (when closing a tab)
   useEffect(() => {
-    registerHandle(tabId, { save: () => saveProject(false), isDirty: () => dirtyRef.current, getState: () => stateRef.current, dispatch, addMedia })
+    registerHandle(tabId, { kind: 'video', save: () => saveProject(false), saveAs: (to) => saveProject(false, to), isDirty: () => dirtyRef.current, getState: () => stateRef.current, dispatch, addMedia, live: () => liveRef.current })
     return () => registerHandle(tabId, null)
   }, [])
 
@@ -412,6 +412,22 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
     mr.start()
     setRec({ phase: 'rec', t0: performance.now() })
     dispatch({ type: 'setPlaying', value: true })
+  }
+
+  // what the AI connection works with (fresh on every render)
+  const liveRef = useRef(null)
+  liveRef.current = {
+    freezeFrame,
+    startRecording,
+    stopRecording,
+    recording: !!rec,
+    snapOn,
+    setSnapOn,
+    rippleOn,
+    setRippleOn,
+    restoreJson,
+    historyKey,
+    reloadTransitions: loadTransitions,
   }
 
   // take a file out of this project (the file itself on the computer is not touched)

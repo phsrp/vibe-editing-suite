@@ -100,6 +100,12 @@ export function buildLayers(state, w, h, live, onLoad) {
 export function makeImageRenderer(canvas) {
   return createRenderer(canvas)
 }
+// A browser only keeps a few renderers: one made for a single picture has to be given back, or the oldest one (the preview) goes.
+export function freeRenderer(canvas) {
+  const gl = canvas.getContext('webgl')
+  const lose = gl && gl.getExtension('WEBGL_lose_context')
+  if (lose) lose.loseContext()
+}
 
 // Renders the whole project at its own size (times `scale`) and returns the picture as a file's bytes.
 // type: 'image/png' | 'image/jpeg' | 'image/webp'
@@ -113,6 +119,7 @@ export async function exportImage(state, { scale = 1, type = 'image/png', qualit
   const r = createRenderer(cv)
   r.renderLayers(buildLayers(state, w, h), backgroundOf(state, type === 'image/jpeg'))
   const blob = await new Promise((res) => cv.toBlob(res, type, quality))
+  freeRenderer(cv)
   if (!blob) throw new Error('The picture could not be made (it may be too big for this computer).')
   return blob.arrayBuffer()
 }

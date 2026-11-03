@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import Icon from './Icon.jsx'
 import { TEXT_PRESETS } from './textRender.js'
-import { loadWhisper, whisperDevice, transcribeWords, speechSources, toCaptions, toSrt, LANGUAGES } from './whisper.js'
+import { makeCaptions, speechSources, toSrt, LANGUAGES } from './whisper.js'
 
 const MB = (n) => Math.round(n / 1048576)
 
@@ -47,32 +47,9 @@ export default function CaptionDialog({ state, dispatch, onClose, onEditByText }
     setPct(0)
     setMsg('Loading the speech model…')
     try {
-      const sources = speechSources(state, only)
-      if (!sources.length) {
-        setMsg(only ? 'Nothing selected has speech in it. Select a video clip (or its sound) first.' : 'No sound to listen to: the videos are silent or muted.')
-        return
-      }
-      await loadWhisper(status.folder)
-      const all = []
-      for (let i = 0; i < sources.length; i++) {
-        const s = sources[i]
-        setMsg(`Listening to ${s.name}${sources.length > 1 ? ` (${i + 1} of ${sources.length})` : ''}… (on the ${whisperDevice()})`)
-        const buf = await window.api.pcm16k({ file: s.file, stream: s.stream, start: s.from, dur: s.to - s.from })
-        const words = await transcribeWords(new Float32Array(buf), { language: lang, onProgress: (p) => setPct((i + p) / sources.length) })
-        const len = s.to - s.from
-        // keep what was said with the video (seconds of the file), for editing by text
-        dispatch({ type: 'setTranscript', mediaId: s.mediaId, from: s.from, to: s.to, words: words.map((w) => ({ text: w.text, s: s.from + Math.min(w.start, len), e: s.from + Math.min(w.end, len) })) })
-        for (const w of words) all.push({ text: w.text, start: s.start + Math.min(w.start, len) / s.speed, end: s.start + Math.min(w.end, len) / s.speed })
-      }
-      all.sort((a, b) => a.start - b.start)
-      const items = toCaptions(all, maxChars)
-      if (!items.length) {
-        setMsg('No speech was found.')
-        return
-      }
-      dispatch({ type: 'addCaptions', items, style: TEXT_PRESETS.find((p) => p.name === styleName), replace })
-      setPct(1)
-      setMsg(`Added ${items.length} captions on the "Captions" track. Click one on the timeline to fix a word or change its look.`)
+      const r = await makeCaptions({ state, dispatch, folder: status.folder, only, language: lang, maxChars, style: TEXT_PRESETS.find((p) => p.name === styleName), replace, onMessage: setMsg, onProgress: setPct })
+      if (r.count) setPct(1)
+      setMsg(r.message)
     } catch (e) {
       setMsg('Something went wrong: ' + String((e && e.message) || e))
     } finally {

@@ -352,7 +352,7 @@ export function streamCount(state) {
 const snap = (s) =>
   s.canvas
     ? { clips: s.clips, audioClips: s.audioClips, overlayClips: s.overlayClips, videoTracks: s.videoTracks, rowOrder: s.rowOrder, lockedRows: s.lockedRows, hiddenRows: s.hiddenRows, canvas: s.canvas }
-    : { clips: s.clips, audioClips: s.audioClips, overlayClips: s.overlayClips }
+    : { clips: s.clips, audioClips: s.audioClips, overlayClips: s.overlayClips, markers: s.markers }
 const hist = (s) => [...s.past, snap(s)].slice(-100)
 function commit(state, patch) {
   return { ...state, ...patch, past: hist(state), future: [] }
@@ -849,6 +849,21 @@ export function reducer(state, a) {
         return { ...c, anim: { ...c.anim, [a.prop]: next } }
       }
       return { ...state, ...mapClips(state, f) }
+    }
+
+    // whole lists of keyframes in one undo step: props = {x: [{t, v, ease}], ...}; older ones between the first and last are replaced
+    case 'setKeysRange': {
+      const f = (c) => {
+        if (c.id !== a.id) return c
+        const anim = { ...c.anim }
+        for (const [prop, keys] of Object.entries(a.props)) {
+          const from = keys[0].t - KEY_EPS
+          const to = keys[keys.length - 1].t + KEY_EPS
+          anim[prop] = sortKeys([...(anim[prop] || []).filter((k) => k.t < from || k.t > to), ...keys])
+        }
+        return { ...c, anim }
+      }
+      return commit(state, mapClips(state, f))
     }
 
     // add a keyframe at t (with the value the property has there), or remove the one that is there
@@ -1525,12 +1540,14 @@ export function reducer(state, a) {
     // ---- markers, locking, hiding, colour labels
     case 'addMarker': {
       const id = a.id || uid()
-      return { ...state, markers: [...state.markers, { id, t: Math.max(0, a.t), label: a.label || '' }].sort((x, y) => x.t - y.t) }
+      return commit(state, { markers: [...state.markers, { id, t: Math.max(0, a.t), label: a.label || '' }].sort((x, y) => x.t - y.t) })
     }
     case 'removeMarker':
-      return { ...state, markers: state.markers.filter((m) => m.id !== a.id) }
+      return commit(state, { markers: state.markers.filter((m) => m.id !== a.id) })
     case 'renameMarker':
-      return { ...state, markers: state.markers.map((m) => (m.id === a.id ? { ...m, label: a.label } : m)) }
+      if (state.markers.some((m) => m.id === a.id && m.label === a.label)) return state
+      return commit(state, { markers: state.markers.map((m) => (m.id === a.id ? { ...m, label: a.label } : m)) })
+    // live drag (call 'checkpoint' first)
     case 'moveMarker':
       return { ...state, markers: state.markers.map((m) => (m.id === a.id ? { ...m, t: Math.max(0, a.t) } : m)).sort((x, y) => x.t - y.t) }
     case 'toggleRowLock': {

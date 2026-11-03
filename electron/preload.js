@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('api', {
   mcpInfo: () => ipcRenderer.invoke('mcp:info'),
   mcpResult: (r) => ipcRenderer.send('mcp:result', r),
   mcpAnswer: (r) => ipcRenderer.send('mcp:answer', r),
+  writeTransition: (o) => ipcRenderer.invoke('transitions:write', o),
+  libraryAddPaths: (paths) => ipcRenderer.invoke('library:addPaths', paths),
   onMcpAsk: (cb) => {
     const h = (_e, d) => cb(d)
     ipcRenderer.on('mcp:ask', h)
@@ -84,7 +86,7 @@ contextBridge.exposeInMainWorld('api', {
   savePastedPicture: (o) => ipcRenderer.invoke('picture:savePasted', o),
   cleanAudio: (o) => ipcRenderer.invoke('audio:clean', o),
   brushesList: () => ipcRenderer.invoke('brushes:list'),
-  brushesImport: () => ipcRenderer.invoke('brushes:import'),
+  brushesImport: (paths) => ipcRenderer.invoke('brushes:import', paths),
   brushesRead: (name) => ipcRenderer.invoke('brushes:read', name),
   brushesDelete: (name) => ipcRenderer.invoke('brushes:delete', name),
   brushesReadPath: (p) => ipcRenderer.invoke('brushes:readPath', p),

@@ -185,6 +185,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
     skipMarker.current = m.id
     const move = (ev) => {
       if (!started && Math.abs(ev.clientX - x0) < 3) return
+      if (!started) dispatch({ type: 'checkpoint' })
       started = true
       let t = Math.max(0, m.t + (ev.clientX - x0) / zoom)
       t = Math.max(0, t + snapShift([t], new Set()))

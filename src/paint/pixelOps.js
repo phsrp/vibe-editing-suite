@@ -40,6 +40,27 @@ export function moveSelected(state, dispatch, sel, dx, dy, copy = false) {
   return shiftSelection(e.w, e.h, sel, dx, dy)
 }
 
+// after a smudge: `before` = the whole layer as it was. Returns the part of it to undo with; with a selection only the selected part keeps the smudge.
+export function smudgeResult(en, r, before, sel) {
+  const crop = newCanvas(r.w, r.h)
+  crop.getContext('2d').drawImage(before, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h)
+  if (sel) {
+    const after = rasterGrab(en, r)
+    const ag = after.getContext('2d')
+    ag.globalCompositeOperation = 'destination-in'
+    ag.drawImage(sel.mask, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h)
+    const lg = en.canvas.getContext('2d')
+    lg.clearRect(r.x, r.y, r.w, r.h)
+    lg.drawImage(before, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h)
+    lg.save()
+    lg.globalCompositeOperation = 'destination-out'
+    lg.drawImage(sel.mask, r.x, r.y, r.w, r.h, r.x, r.y, r.w, r.h)
+    lg.restore()
+    lg.drawImage(after, r.x, r.y)
+  }
+  return crop
+}
+
 // the selected pixels as a picture of their own
 export function copyPixels(state, sel) {
   const id = soleVideoClip(state)

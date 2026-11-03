@@ -10,7 +10,7 @@ const ENCODERS = [
 ]
 
 // ready-made export settings for the places videos usually go
-const PRESET_LIST = [
+export const PRESET_LIST = [
   { id: 'custom', label: 'Custom (your own settings)' },
   { id: 'yt1080', label: 'YouTube 1080p', aspect: '16:9', s: { res: '1080p', fps: 30, codec: 'h264', bitrate: 12, container: 'mp4', speed: 'balanced', audioKbps: 192, loudness: '-14' } },
   { id: 'yt4k', label: 'YouTube 4K', aspect: '16:9', s: { res: '4K', fps: 30, codec: 'h264', bitrate: 45, container: 'mp4', speed: 'balanced', audioKbps: 256, loudness: '-14' } },
@@ -24,12 +24,24 @@ const PRESET_LIST = [
 ]
 
 const KEY = 'vibe.exportSettings'
-const load = () => {
+export const load = () => {
   try {
     return { ...defaultSettings, ...JSON.parse(localStorage.getItem(KEY) || '{}') }
   } catch {
     return defaultSettings
   }
+}
+// what a preset sets, for a video of this many seconds
+export function presetPatch(id, seconds) {
+  const p = PRESET_LIST.find((x) => x.id === id)
+  if (!p || id === 'custom') return null
+  const dur = Math.max(1, seconds)
+  const patch = { ...p.s, outputKind: 'video', preset: id }
+  if (!p.limitMB) return patch
+  // pick the video bitrate so the whole file stays under the limit
+  const total = (p.limitMB * 8 * 0.9) / dur // Mbit/s for video + sound
+  const video = Math.max(0.3, Math.min(60, total - p.s.audioKbps / 1000))
+  return { ...patch, bitrate: +video.toFixed(2), res: video >= 3 ? '1080p' : '720p' }
 }
 
 const fmtDur = (s) => {
@@ -62,16 +74,8 @@ export default function ExportTab({ active, getProject, onStatus }) {
 
   const set = (patch) => setS((x) => ({ ...x, ...patch, preset: 'custom' })) // changing anything by hand leaves the preset
   const applyPreset = (id) => {
-    const p = PRESET_LIST.find((x) => x.id === id)
-    if (!p || id === 'custom') return setS((x) => ({ ...x, preset: 'custom' }))
-    const dur = Math.max(1, projectDuration(project.state))
-    let patch = { ...p.s, outputKind: 'video', preset: id }
-    if (p.limitMB) {
-      // pick the video bitrate so the whole file stays under the limit
-      const total = (p.limitMB * 8 * 0.9) / dur // Mbit/s for video + sound
-      const video = Math.max(0.3, Math.min(60, total - p.s.audioKbps / 1000))
-      patch = { ...patch, bitrate: +video.toFixed(2), res: video >= 3 ? '1080p' : '720p' }
-    }
+    const patch = presetPatch(id, projectDuration(project.state))
+    if (!patch) return setS((x) => ({ ...x, preset: 'custom' }))
     setS((x) => ({ ...x, ...patch }))
   }
   useEffect(() => {

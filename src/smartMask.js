@@ -249,7 +249,17 @@ export async function findSubjectPrompt({ el, w, h, prompt, paths }) {
 
 // Follows a subject's outline through a video with SAM 2. startPts = its outline at second times[0]; times = the
 // seconds to look at in order. Returns [{t, pts}] ([] = the subject is not in the picture), or null if cancelled.
-export async function trackOutline({ file, startPts, times, paths, quad, onProgress, isCancelled }) {
+let tracking = 0
+export const isTracking = () => tracking > 0
+export async function trackOutline(o) {
+  tracking++
+  try {
+    return await follow(o)
+  } finally {
+    tracking--
+  }
+}
+async function follow({ file, startPts, times, paths, quad, onProgress, isCancelled }) {
   const { sam, m } = await getSam2(paths)
   const v = document.createElement('video')
   v.muted = true

@@ -9,6 +9,7 @@ import Icon from './Icon.jsx'
 import SettingsDialog from './SettingsDialog.jsx'
 import UpdateDialog from './UpdateDialog.jsx'
 import McpAskDialog from './McpAskDialog.jsx'
+import JobDialog from './JobDialog.jsx'
 import ExportTab from './ExportTab.jsx'
 import ColourTab from './ColourTab.jsx'
 import { cancelExport } from './exporter.js'
@@ -202,26 +203,38 @@ export default function App() {
     if (activeId === id) setActiveId(rest.length ? rest[Math.max(0, idx - 1)].id : 'home')
   }
 
-  // the AI connection: what an AI app asks for is done on the video project in front (or the last one that was)
+  // the AI connection: what an AI app asks for is done on the project in front (or the last one that was)
   const mcpCtx = useRef(null)
-  const lastVideo = useRef(null)
+  const lastProject = useRef(null)
   const inFront = tabs.find((t) => t.id === activeId) || tabs.find((t) => t.id === (exports.find((x) => x.id === activeId) || colours.find((x) => x.id === activeId) || {}).projectId)
-  if (inFront && inFront.kind === 'video') lastVideo.current = inFront.id
+  if (inFront) lastProject.current = inFront.id
   mcpCtx.current = {
     project: () => {
-      const id = inFront && inFront.kind !== 'video' ? null : lastVideo.current
+      const id = lastProject.current
       return id && handles.current[id] ? { id, handle: handles.current[id] } : null
     },
-    onImage: () => !!(inFront && inFront.kind === 'image'),
+    projects: () => tabs.map((t) => ({ id: t.id, title: t.title, kind: t.kind === 'image' ? 'picture' : t.kind, unsaved: !!t.dirty, path: t.path || null, inFront: !!inFront && inFront.id === t.id })),
     newProject: () => newTab(null, 'video'),
+    newPicture: (canvas) => newTab({ canvas }, 'image'),
+    openPicture: (item) => newTab({ picture: item }, 'image'),
+    openFile,
+    closeTab,
     openExport,
     focus: setActiveId,
+    settings,
+    setSettings,
+    themes: customThemes,
+    setTheme,
+    binds,
+    setBinds,
+    checkNow,
+    update,
   }
   useEffect(
     () =>
       window.api.onMcpCall(async ({ id, name, args }) => {
         try {
-          window.api.mcpResult({ id, result: await runTool(name, args || {}, mcpCtx.current) })
+          window.api.mcpResult({ id, result: await runTool(name, args || {}, mcpCtx) })
         } catch (e) {
           window.api.mcpResult({ id, error: String((e && e.message) || e) })
         }
@@ -485,6 +498,7 @@ export default function App() {
           <button onClick={() => setPreview(null)} title="Go back to the theme that is in use">Stop</button>
         </div>
       )}
+      <JobDialog />
       {mcpAsks[0] && <McpAskDialog key={mcpAsks[0].id} detail={mcpAsks[0].detail} onAnswer={answerMcp} />}
     </div>
   )

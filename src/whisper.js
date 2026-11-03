@@ -180,6 +180,29 @@ export function toCaptions(words, maxChars = 36, maxSeconds = 4.5) {
   })
 }
 
+// Listens to the project and adds the captions. Returns {count, message}. Throws if the model cannot run.
+export async function makeCaptions({ state, dispatch, folder, only, language, maxChars = 36, style, replace, onMessage, onProgress }) {
+  const sources = speechSources(state, only)
+  if (!sources.length) return { count: 0, message: only ? 'Nothing selected has speech in it. Select a video clip (or its sound) first.' : 'No sound to listen to: the videos are silent or muted.' }
+  await loadWhisper(folder)
+  const all = []
+  for (let i = 0; i < sources.length; i++) {
+    const s = sources[i]
+    onMessage(`Listening to ${s.name}${sources.length > 1 ? ` (${i + 1} of ${sources.length})` : ''}… (on the ${whisperDevice()})`)
+    const buf = await window.api.pcm16k({ file: s.file, stream: s.stream, start: s.from, dur: s.to - s.from })
+    const words = await transcribeWords(new Float32Array(buf), { language, onProgress: (p) => onProgress((i + p) / sources.length) })
+    const len = s.to - s.from
+    // keep what was said with the video (seconds of the file), for editing by text
+    dispatch({ type: 'setTranscript', mediaId: s.mediaId, from: s.from, to: s.to, words: words.map((w) => ({ text: w.text, s: s.from + Math.min(w.start, len), e: s.from + Math.min(w.end, len) })) })
+    for (const w of words) all.push({ text: w.text, start: s.start + Math.min(w.start, len) / s.speed, end: s.start + Math.min(w.end, len) / s.speed })
+  }
+  all.sort((a, b) => a.start - b.start)
+  const items = toCaptions(all, maxChars)
+  if (!items.length) return { count: 0, message: 'No speech was found.' }
+  dispatch({ type: 'addCaptions', items, style, replace })
+  return { count: items.length, message: `Added ${items.length} captions on the "Captions" track. Click one on the timeline to fix a word or change its look.` }
+}
+
 // .srt text of the captions: [{start, dur, text}]
 export function toSrt(items) {
   const ts = (t) => {

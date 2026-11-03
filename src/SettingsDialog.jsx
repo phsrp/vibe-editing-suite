@@ -181,7 +181,7 @@ function AiPage({ settings, setSettings }) {
       <div className="set-row">
         <div>
           <div className="set-title">Let an AI app use the editor</div>
-          <div className="hint left">An AI app on this PC, such as Claude, can read your timeline and make edits while the editor is open. You see every change, and Ctrl+Z takes it back. This uses MCP, an open standard for connecting AI apps to programs.</div>
+          <div className="hint left">An AI app on this PC, such as Claude, can use the whole editor while it is open: edit video, make pictures and thumbnails, paint, add captions and export. You see every change, and Ctrl+Z takes it back. This uses MCP, an open standard for connecting AI apps to programs.</div>
         </div>
         <label className="switch">
           <input type="checkbox" checked={on} onChange={(e) => setSettings({ mcpEnabled: e.target.checked })} />
@@ -205,12 +205,12 @@ function AiPage({ settings, setSettings }) {
           {info && <div className="ai-code"><pre>{info.codeCommand}</pre><button className="mini wide" onClick={() => copy('code', info.codeCommand)}>{copied === 'code' ? 'Copied' : 'Copy'}</button></div>}
         </li>
         <li><b>Another app that supports MCP:</b> add a local (stdio) server. The command, arguments and environment are the same as in the Claude Desktop text.</li>
-        <li>Open a video project, then ask the AI something like "look at my timeline and add a title at the start".</li>
+        <li>Ask the AI something like "look at my timeline and add a title at the start", or "make a thumbnail in the style of this picture".</li>
       </ol>
       <h5>Good to know</h5>
       <ul className="ai-steps">
-        <li>It works on the video project in front. Picture projects are not supported yet.</li>
-        <li>You are always asked first before it deletes clips, adds files or saves. Exporting is yours: it can only open the Export tab.</li>
+        <li>It works on the project in front, video or picture, and it can switch between open projects.</li>
+        <li>You are always asked first before it deletes clips, opens or adds files, saves or exports, changes a setting, downloads something or uses the microphone.</li>
         <li>It only accepts connections from this PC, and it stays off until you turn it on.</li>
         <li>What you ask, and anything the AI reads such as your timeline, transcript or preview pictures, is sent to that AI app's service, under its own rules and your plan with it.</li>
       </ul>
