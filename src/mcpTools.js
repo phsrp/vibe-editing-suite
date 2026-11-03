@@ -1,8 +1,8 @@
 // The AI connection, page side: what each tool does (the list and its descriptions are in electron/mcpTools.js).
 // An AI app goes through the same actions as the buttons, so its changes show up at once and Ctrl+Z takes them back.
 // mcpApp.js = the editor as a whole, mcpPicture.js = what is special in picture projects, this file = the rest.
-import { layout, overlayLayout, audioLayout, srcAt, projectDuration, rowKeys, hasAttached, isLocked, streamCount, streamAudioOf, audioClipVol, copySelection, clipPicture, aspectRatio, ASPECTS, uid } from './state.js'
-import { evalProp, keyTimes, keyAt, PROPS, EASES, WARP_ZERO } from './motion.js'
+import { layout, overlayLayout, audioLayout, srcAt, tlOf, projectDuration, rowKeys, hasAttached, isLocked, streamCount, streamAudioOf, audioClipVol, copySelection, clipPicture, aspectRatio, ASPECTS, uid } from './state.js'
+import { evalProp, keyAt, PROPS, EASES, WARP_ZERO } from './motion.js'
 import { CC_DEFAULTS, CC_SLIDERS, CC_PRESETS, FX_SLIDERS } from './effects.js'
 import { TEXT_PRESETS } from './textRender.js'
 import { imageFor, imagesReady } from './imageRender.js'
@@ -10,7 +10,7 @@ import { rasterView } from './paint/raster.js'
 import { boxPrompt, startFollow, startTrackMask, subjectOutline, videoOutline } from './followSubject.js'
 import { startJob, jobRunning } from './mcpJobs.js'
 import { appTool } from './mcpApp.js'
-import { pictureTool, isPictureTool } from './mcpPicture.js'
+import { pictureTool, isPictureTool, textBox } from './mcpPicture.js'
 import { makeCaptions, toSrt } from './whisper.js'
 import { sequenceWords, wordsRange, fillerRanges, pauseRanges } from './TranscriptDialog.jsx'
 import { runExport, cancelExport, isExporting } from './exporter.js'
@@ -46,10 +46,28 @@ const picture = (s, id) => {
   return f
 }
 const propOk = (p) => need(PROPS.some((x) => x.id === p && !x.mask), `Unknown property ${p}.`)
+// what a value may be: wider than the sliders (a clip can slide in from outside the frame), but nothing that makes no sense
+const LIMITS = { x: [-500, 500], y: [-500, 500], scale: [1, 1000], sx: [1, 1000], sy: [1, 1000], rot: [-3600, 3600], opacity: [0, 100] }
+const valueOk = (p, v) => {
+  const [lo, hi] = LIMITS[p]
+  need(Number.isFinite(+v) && +v >= lo && +v <= hi, `${p} must be between ${lo} and ${hi}.`)
+}
 const time = (v, s) => Math.max(0, v == null ? s.playhead : +v)
 const trackKey = (s, key) => {
   need(rowKeys(s).includes(key), `There is no track ${key}. Call get_project for the current tracks.`)
   return key
+}
+
+// how a sound is set: only what differs from the original. toTime = seconds of the file -> seconds on the timeline
+function soundInfo(st, toTime) {
+  const o = {}
+  if (st.volume !== 1) o.volume = round(st.volume)
+  if (st.mute) o.mute = true
+  if (st.fadeIn) o.fadeIn = round(st.fadeIn)
+  if (st.fadeOut) o.fadeOut = round(st.fadeOut)
+  if (st.env && st.env.length) o.volumeLine = st.env.map((p) => [round(toTime(p.t)), round(p.v)])
+  if (st.clean && (st.clean.nr || st.clean.rumble || st.clean.voice)) o.cleanUp = st.clean
+  return o
 }
 
 function describeClip(c, s, where) {
@@ -62,24 +80,30 @@ function describeClip(c, s, where) {
   if (c.label) out.label = c.label
   if (c.transition && c.transition.name) out.transitionIn = { name: c.transition.name, seconds: c.transition.duration }
   if (c.fx) out.effects = c.fx
-  if (c.text) out.text = c.text
+  if (c.text) {
+    out.text = c.text
+    out.textBox = textBox(s, c) // where the words are, in % of the frame
+  }
   if (where !== 'audio') {
+    // a keyframe's time: on the timeline (what the tools take) and in the file (what is stored)
+    const at = (k) => ({ time: round(tlOf(c, k.t)), fileTime: round(k.t) })
     const keys = {}
     for (const p of PROPS) {
       const list = c.anim && c.anim[p.id]
-      if (list && list.length) keys[p.id] = list.map((k) => ({ fileTime: round(k.t), value: round(k.v), ease: k.ease }))
+      if (list && list.length) keys[p.id] = list.map((k) => ({ ...at(k), value: round(k.v), ease: k.ease }))
     }
     if (Object.keys(keys).length) out.keyframes = keys
-    else if (keyTimes(c).length) out.keyframes = 'warp or mask only'
     if (c.mask) out.mask = { shape: c.mask.shape, tracked: !!(c.mask.frames && c.mask.frames.length), invert: !!c.mask.invert, feather: c.mask.feather }
-    if (c.warp) out.warped = true
+    if (c.warp) out.warp = { fixed: c.warp.fixed, keyframes: (c.warp.keys || []).map((k) => ({ ...at(k), corners: k.c, ease: k.ease })) }
+    if (where === 'main' && m && m.type === 'video') {
+      out.sound = (m.audioStreams || []).map((_, n) => (hasAttached(c, m, n) ? { stream: n, ...soundInfo(streamAudioOf(c, n), (t) => tlOf(c, t)) } : { stream: n, detached: true }))
+      if (!out.sound.length) delete out.sound
+    }
     const look = {}
     for (const p of PROPS) if (!p.mask && evalProp(c, p.id, c.in) !== p.def) look[p.id] = round(evalProp(c, p.id, c.in))
     if (Object.keys(look).length) out.values = look
   } else {
-    const v = audioClipVol(c)
-    if (v.volume !== 1) out.volume = round(v.volume)
-    if (v.mute) out.mute = true
+    Object.assign(out, soundInfo(audioClipVol(c), (t) => c.start + t - c.in))
     if (c.origin) out.soundOf = c.origin
   }
   return out
@@ -164,8 +188,20 @@ export async function runTool(name, args, ctxRef) {
     case 'get_preview': {
       ctx.focus(p.id)
       if (args.time != null) D({ type: 'setPlayhead', t: Math.max(0, +args.time), user: true })
-      await wait(500)
-      const cv = [...document.querySelectorAll('.preview-canvas')].find((c) => c.offsetParent)
+      // wait until the preview has drawn this very state, with every video at its frame (seeking takes a moment)
+      const t0 = Date.now()
+      let cv
+      let fresh = false
+      while (Date.now() - t0 < 6000) {
+        await wait(40)
+        cv = [...document.querySelectorAll('.preview-canvas')].find((c) => c.offsetParent)
+        const d = cv && cv.__drawn
+        if (d && d.settled && (d.s === state() || (state().playing && Date.now() - t0 > 300))) {
+          fresh = true
+          await wait(50)
+          break
+        }
+      }
       need(cv, 'The preview is not on screen.')
       const small = document.createElement('canvas')
       small.width = Math.min(960, cv.width)
@@ -174,7 +210,7 @@ export async function runTool(name, args, ctxRef) {
       g.fillStyle = '#000'
       g.fillRect(0, 0, small.width, small.height)
       g.drawImage(cv, 0, 0, small.width, small.height)
-      return { image: small.toDataURL('image/jpeg', 0.8).split(',')[1], mime: 'image/jpeg', text: `The picture at ${round(state().playhead)} s.` }
+      return { image: small.toDataURL('image/jpeg', 0.8).split(',')[1], mime: 'image/jpeg', text: `The picture at ${round(state().playhead)} s.${fresh ? '' : ' A video was still loading, so it may not be fully up to date: look again in a moment.'}` }
     }
     case 'get_transcript': {
       const tr = s.transcripts && s.transcripts[args.mediaId]
@@ -197,7 +233,7 @@ export async function runTool(name, args, ctxRef) {
         ranges = [wordsRange(words, +args.first, args.last == null ? +args.first : +args.last)]
       }
       need(ranges.length, 'Nothing to remove.')
-      D({ type: 'rippleDelete', ranges })
+      D({ type: 'rippleDelete', ranges, tidy: true })
       await wait()
       return { text: `Cut ${ranges.length} place${ranges.length === 1 ? '' : 's'}, ${round(ranges.reduce((a, r) => a + r[1] - r[0], 0))} seconds.` }
     }
@@ -238,7 +274,8 @@ export async function runTool(name, args, ctxRef) {
       if (args.preset) {
         const look = TEXT_PRESETS.find((x) => x.name.toLowerCase() === String(args.preset).toLowerCase())
         need(look, `There is no text preset ${args.preset}. See editor_info.`)
-        D({ type: 'applyTextPreset', id: clip.id, text: look.text, y: look.y })
+        // the look only: the text stays where it is unless presetPosition asks for the preset's place too
+        D({ type: 'applyTextPreset', id: clip.id, text: look.text, y: args.presetPosition ? look.y : evalProp(clip, 'y', clip.in) })
       }
       const patch = { ...args.style }
       if (args.text != null) patch.content = String(args.text)
@@ -288,13 +325,13 @@ export async function runTool(name, args, ctxRef) {
         return true
       })
       need(ids.length, 'Give at least one clip id.')
-      D({ type: 'selectMany', ids })
+      D({ type: 'selectMany', ids, exact: true }) // only these: the other clips of their groups stay
       D({ type: 'deleteSelection', keepGap: args.closeGaps === false })
       return { text: `Deleted ${ids.length}.` }
     }
     case 'copy_clips': {
       need(Array.isArray(args.clipIds) && args.clipIds.length, 'Give at least one clip id.')
-      D({ type: 'selectMany', ids: args.clipIds })
+      D({ type: 'selectMany', ids: args.clipIds, exact: true })
       await wait()
       return { text: `Copied ${copySelection(state())}.` }
     }
@@ -305,7 +342,7 @@ export async function runTool(name, args, ctxRef) {
     }
     case 'duplicate_clips': {
       need(Array.isArray(args.clipIds) && args.clipIds.length, 'Give at least one clip id.')
-      D({ type: 'selectMany', ids: args.clipIds })
+      D({ type: 'selectMany', ids: args.clipIds, exact: true })
       D({ type: 'duplicate' })
       await wait()
       return json({ newIds: state().selection })
@@ -349,6 +386,7 @@ export async function runTool(name, args, ctxRef) {
     case 'add_keyframe': {
       const { clip } = picture(s, args.clipId)
       propOk(args.property)
+      valueOk(args.property, args.value)
       const list = (clip.anim && clip.anim[args.property]) || []
       const t = srcAt(clip, time(args.time, s))
       D({ type: 'checkpoint' })
@@ -372,6 +410,7 @@ export async function runTool(name, args, ctxRef) {
         D({ type: 'setEase', id: clip.id, prop: args.property, t, ease, bez: args.bezier })
       }
       if (args.value != null) {
+        valueOk(args.property, args.value)
         D({ type: 'checkpoint' })
         D({ type: 'setProp', id: clip.id, prop: args.property, value: +args.value, t })
       }
@@ -428,7 +467,14 @@ export async function runTool(name, args, ctxRef) {
         const names = (await window.api.listTransitions()).map((t) => t.name)
         need(names.includes(args.name), `There is no transition called ${args.name}. Use list_transitions.`)
       }
-      D({ type: 'setTransition', id: clip.id, transition: args.name ? { name: args.name, duration: args.duration > 0 ? +args.duration : 1 } : null })
+      const lay = layout(s.clips)
+      const i = lay.findIndex((x) => x.id === clip.id)
+      need(i > 0 || !args.name, 'The first clip has nothing before it to come from.')
+      // it overlaps the clip before, so it cannot be longer than either clip (or the 4 seconds the slider allows)
+      const most = i > 0 ? Math.floor(Math.min(4, lay[i - 1].dur, clip.dur) * 100) / 100 : 4
+      const dur = args.duration == null ? Math.min(1, most) : +args.duration
+      need(dur > 0 && dur <= most, `duration must be more than 0 and at most ${most} seconds here.`)
+      D({ type: 'setTransition', id: clip.id, transition: args.name ? { name: args.name, duration: dur } : null })
       return { text: 'Done.' }
     }
     case 'set_effect': {
@@ -590,6 +636,8 @@ export async function runTool(name, args, ctxRef) {
       if (args.envelope) {
         need(ids.length === 1 || args.stream != null, 'A volume line goes on one sound: give stream too.')
         const { src } = soundOf(s, ids[0])
+        const end = clip.start + clip.dur
+        for (const [t] of args.envelope) need(+t >= clip.start - 0.001 && +t <= end + 0.001, `The volume line's times must be on that clip: ${round(clip.start)} to ${round(end)} s.`)
         patch.env = args.envelope.map(([t, v]) => ({ t: src(+t), v: Math.max(0, Math.min(2, +v)) })).sort((a, b) => a.t - b.t)
       }
       if (args.loudness != null) {

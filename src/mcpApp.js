@@ -12,6 +12,21 @@ import { ACTIONS } from './keybinds.js'
 import { allThemes, TOKENS } from './themes.js'
 import { PRESET_LIST } from './ExportTab.jsx'
 import { loadImageUrl } from './paint/raster.js'
+import { builtinBrushes } from './paint/builtinBrushes.js'
+import { loadPacks } from './paint/usePaintKit.js'
+import { transitionError } from './mcpPicture.js'
+
+// a shortcut as the editor writes it: Ctrl, Alt, Shift in that order, then one key
+const NAMED = ['Space', 'Delete', 'Home', 'End', 'Enter', 'Escape', 'Tab', 'PageUp', 'PageDown', 'Insert', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ...Array.from({ length: 12 }, (_, i) => 'F' + (i + 1))]
+function shortcutOf(text) {
+  const parts = String(text).split('+').map((p) => p.trim()).filter(Boolean)
+  const key = parts.pop() || ''
+  const mods = parts.map((m) => ({ ctrl: 'Ctrl', control: 'Ctrl', alt: 'Alt', shift: 'Shift' })[m.toLowerCase()])
+  if (mods.some((m) => !m) || new Set(mods).size !== mods.length) return null
+  const k = key.length === 1 ? key.toUpperCase() : NAMED.find((n) => n.toLowerCase() === key.toLowerCase())
+  if (!k || (k.length === 1 && !/^[A-Z0-9,.;'/=[\]-]$/.test(k))) return null
+  return [...['Ctrl', 'Alt', 'Shift'].filter((m) => mods.includes(m)), k].join('+')
+}
 
 const wait = (ms = 90) => new Promise((r) => setTimeout(r, ms))
 const json = (o) => ({ text: JSON.stringify(o) })
@@ -75,8 +90,8 @@ export async function appTool(name, args, ctxRef) {
     case 'new_video_project': {
       const was = lastId(ctxRef)
       ctx.newProject()
-      await tabReady(ctxRef, was)
-      return { text: 'A new empty video project is open.' }
+      const p = await tabReady(ctxRef, was)
+      return { text: `A new empty video project is open. Its id is ${p.id}.` }
     }
     case 'new_picture_project': {
       const was = lastId(ctxRef)
@@ -84,8 +99,8 @@ export async function appTool(name, args, ctxRef) {
       const h = Math.round(+args.height)
       need(w >= 16 && h >= 16 && w <= 16384 && h <= 16384, 'width and height are 16 to 16384 pixels.')
       ctx.newPicture({ w, h, bg: args.background || '#ffffff' })
-      await tabReady(ctxRef, was)
-      return { text: `A new picture project of ${w} x ${h} is open.` }
+      const p = await tabReady(ctxRef, was)
+      return { text: `A new picture project of ${w} x ${h} is open. Its id is ${p.id}.` }
     }
     case 'open_project': {
       const was = lastId(ctxRef)
@@ -93,20 +108,23 @@ export async function appTool(name, args, ctxRef) {
       ctx.openFile(res.file, res.json)
       await wait(300)
       if (lastId(ctxRef) === was) await tabReady(ctxRef, was).catch(() => {})
-      return { text: 'Opened.' }
+      return { text: `Opened. Its id is ${lastId(ctxRef)}.` }
     }
     case 'open_picture': {
       const was = lastId(ctxRef)
       const [item] = await window.api.describeFiles([String(args.path)])
       need(item && item.type === 'image', 'That is not a picture that can be read.')
       ctx.openPicture(item)
-      await tabReady(ctxRef, was)
-      return { text: 'Opened as a new picture project.' }
+      const p = await tabReady(ctxRef, was)
+      return { text: `Opened as a new picture project. Its id is ${p.id}.` }
     }
     case 'close_project': {
       const id = args.id || lastId(ctxRef)
       need(ctx.projects().some((t) => t.id === id), 'That project is not open.')
       await ctx.closeTab(id)
+      await wait(200)
+      // with unsaved changes the person is asked, and may keep it open
+      if (ctxRef.current.projects().some((t) => t.id === id)) return { text: 'It is still open: it has unsaved changes, and the person chose to keep it.' }
       return { text: 'Closed.' }
     }
     case 'editor_info': {
@@ -119,10 +137,10 @@ export async function appTool(name, args, ctxRef) {
         models: { tracking: tracking.ready, speech: speech.ready },
         storage,
         exportEncoders: ['cpu', ...encoders.available],
-        exportPresets: PRESET_LIST.filter((p) => p.id !== 'custom').map((p) => ({ id: p.id, label: p.label })),
+        exportPresets: PRESET_LIST.filter((p) => p.id !== 'custom').map((p) => ({ id: p.id, label: p.label, fileType: p.s.container || 'mp4', shape: p.aspect })),
         libraryFiles: library.length,
         settings: Object.fromEntries(Object.keys(SETTINGS).map((k) => [k, ctx.settings[k]])),
-        themes: allThemes(ctx.themes).map((t) => ({ id: t.id, name: t.name })),
+        themes: allThemes(ctx.themes).map((t) => ({ id: t.id, name: t.name, inUse: t.id === ctx.theme || undefined, madeByYou: !t.builtin || undefined })),
         themeColours: TOKENS.flatMap((g) => g.items.map((i) => ({ key: i.key, label: i.label }))),
         shortcuts: ACTIONS.map((a) => ({ action: a.id, label: a.label, keys: ctx.binds[a.id] })),
         reference: {
@@ -170,8 +188,23 @@ export async function appTool(name, args, ctxRef) {
     }
     case 'set_shortcut': {
       need(ACTIONS.some((a) => a.id === args.action), `There is no action ${args.action}. See editor_info.`)
-      ctx.setBinds({ ...ctx.binds, [args.action]: String(args.keys) })
-      return { text: 'Done.' }
+      const keys = shortcutOf(args.keys)
+      need(keys, 'keys is like Ctrl+Shift+K, F5 or M: Ctrl, Alt and Shift, then one letter, digit, sign, F1 to F12 or a key such as Space, Delete, Home or ArrowLeft.')
+      const taken = Object.entries(ctx.binds).find(([a, k]) => k === keys && a !== args.action)
+      need(!taken, `${keys} is already used for "${(ACTIONS.find((a) => a.id === (taken || [])[0]) || {}).label}". Change that one first, or pick other keys.`)
+      ctx.setBinds({ ...ctx.binds, [args.action]: keys })
+      return { text: `Set to ${keys}.` }
+    }
+    case 'delete_theme': {
+      const t = ctx.themes.find((x) => x.id === args.id)
+      need(t, 'There is no theme of yours with that id. The two that come with the editor cannot be deleted.')
+      if (ctx.theme === t.id) ctx.setTheme('dark')
+      await ctx.setSettings({ themes: ctx.themes.filter((x) => x.id !== t.id) })
+      return { text: `Deleted "${t.name}".` }
+    }
+    case 'list_brushes': {
+      const one = (b) => ({ id: b.id, name: b.name, size: b.size })
+      return json({ builtIn: builtinBrushes().map(one), packs: (await loadPacks()).map((k) => ({ file: k.file, title: k.title, brushes: k.brushes.map(one), error: k.error })) })
     }
     case 'check_for_updates':
       ctx.checkNow()
@@ -191,13 +224,17 @@ export async function appTool(name, args, ctxRef) {
     case 'view_file': {
       const file = String(args.path)
       if (/\.(mp4|mov|mkv|webm|avi|m4v)$/i.test(file)) {
-        const v = await openedVideo(toUrl(file), +args.time || 0)
+        const v = await openedVideo(toUrl(file), +args.time || 0).catch(() => {
+          throw new Error(`${file} could not be opened. Is the path right?`)
+        })
         const image = photo(v, v.videoWidth, v.videoHeight)
         v.removeAttribute('src')
         v.load()
         return { image, mime: 'image/jpeg', text: `A frame of ${file}.` }
       }
-      const img = await loadImageUrl(toUrl(file))
+      const img = await loadImageUrl(toUrl(file)).catch(() => {
+        throw new Error(`${file} could not be opened as a picture. Is the path right?`)
+      })
       return { image: photo(img, img.naturalWidth, img.naturalHeight), mime: 'image/jpeg', text: `${file}, ${img.naturalWidth} x ${img.naturalHeight} pixels.` }
     }
     case 'list_library':
@@ -216,6 +253,9 @@ export async function appTool(name, args, ctxRef) {
       return { text: t.source }
     }
     case 'write_transition': {
+      // tried first: a transition with a mistake in it would just show nothing
+      const err = transitionError(String(args.source))
+      need(!err, `It was not saved: the shader has a mistake.\n${err}`)
       const saved = await window.api.writeTransition({ name: args.name, source: args.source })
       const p = ctx.project()
       if (p && p.handle.kind === 'video') await p.handle.live().reloadTransitions()

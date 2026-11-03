@@ -282,7 +282,8 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
     }
   }, [])
   useEffect(() => {
-    registerHandle(tabId, { kind: 'image', save: () => saveProject(false), saveAs: (to) => saveProject(false, to), isDirty: () => dirtyRef.current, getState: () => stateRef.current, dispatch, live: () => liveRef.current })
+    // (the dirty flag lags 0.6 s behind an edit: closing asks the state itself)
+    registerHandle(tabId, { kind: 'image', save: () => saveProject(false), saveAs: (to) => saveProject(false, to), isDirty: () => serializeImage(stateRef.current) !== savedJson.current, getState: () => stateRef.current, dispatch, live: () => liveRef.current })
     return () => registerHandle(tabId, null)
   }, [])
   // what the AI connection works with (fresh on every render)

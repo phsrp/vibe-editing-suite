@@ -36,6 +36,9 @@ export const TEXT_PRESETS = [
   { name: 'Typed', text: { size: 7, bold: false, font: 'Courier New', color: '#f6c177', shadow: { on: false, color: '#000000', blur: 0 }, animIn: 'type', animOut: 'none' }, y: 0 },
 ]
 
+// Montserrat comes with the editor, where the browser knows it as "Montserrat Variable" (Windows does not have it)
+const family = (font) => (font === 'Montserrat' ? '"Montserrat Variable", "Montserrat"' : `"${font}"`)
+
 const clamp01 = (v) => Math.max(0, Math.min(1, v))
 const easeOutBack = (u) => 1 + 2.70158 * Math.pow(u - 1, 3) + 1.70158 * Math.pow(u - 1, 2)
 
@@ -65,7 +68,7 @@ export function drawText(cv, text, t, dur) {
   ctx.clearRect(0, 0, W, H)
   const tx = { ...TEXT_DEFAULTS, ...text }
   const px = (tx.size / 100) * H
-  ctx.font = `${tx.italic ? 'italic ' : ''}${tx.bold ? '700' : '400'} ${px}px "${tx.font}", sans-serif`
+  ctx.font = `${tx.italic ? 'italic ' : ''}${tx.bold ? '700' : '400'} ${px}px ${family(tx.font)}, sans-serif`
   ctx.textBaseline = 'middle'
   ctx.lineJoin = 'round'
 
@@ -157,7 +160,7 @@ export function drawText(cv, text, t, dur) {
 export function loadFont(text) {
   const tx = { ...TEXT_DEFAULTS, ...text }
   try {
-    return document.fonts.load(`${tx.bold ? '700' : '400'} 40px "${tx.font}"`)
+    return document.fonts.load(`${tx.bold ? '700' : '400'} 40px ${family(tx.font)}`)
   } catch {
     return Promise.resolve()
   }

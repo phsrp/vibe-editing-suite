@@ -10,6 +10,7 @@ import { makeSelection, makeMaskSelection, invertSelection } from './paint/selec
 import { commitPixels, deleteSelected, moveSelected, copyPixels, addPixelLayer, smudgeResult } from './paint/pixelOps.js'
 import { loadPacks } from './paint/usePaintKit.js'
 import { promptFromLoop } from './smartMask.js'
+import { drawText } from './textRender.js'
 
 const round = (v) => (typeof v === 'number' ? Math.round(v * 100) / 100 : v)
 const wait = (ms = 90) => new Promise((r) => setTimeout(r, ms))
@@ -52,6 +53,51 @@ export function layerBox(s, clip) {
   const h = (tf.scale * (tf.sy / 100)) / sc[1]
   return { left: round(50 + tf.x - w / 2), top: round(50 + tf.y - h / 2), right: round(50 + tf.x + w / 2), bottom: round(50 + tf.y + h / 2) }
 }
+// where the words of a text fall in its picture (0..1), found by drawing it once; remembered per look
+const areas = new Map()
+function textArea(text, ratio) {
+  const key = JSON.stringify([text, round(ratio)])
+  if (areas.has(key)) return areas.get(key)
+  const h = 270
+  const w = Math.max(1, Math.round(h * ratio))
+  const cv = newCanvas(w, h)
+  drawText(cv, { ...text, animIn: 'none', animOut: 'none' }, 50, 100)
+  const d = cv.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, w, h).data
+  let x0 = w
+  let y0 = h
+  let x1 = -1
+  let y1 = -1
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      if (d[(y * w + x) * 4 + 3] > 20) {
+        if (x < x0) x0 = x
+        if (x > x1) x1 = x
+        if (y < y0) y0 = y
+        if (y > y1) y1 = y
+      }
+  const area = x1 < 0 ? null : { x0: x0 / w, y0: y0 / h, x1: (x1 + 1) / w, y1: (y1 + 1) / h }
+  if (areas.size > 200) areas.clear()
+  areas.set(key, area)
+  return area
+}
+// the box the words of a text clip or layer fill, in % of the frame (its layer box is the whole frame)
+export function textBox(s, clip) {
+  const b = layerBox(s, clip)
+  const a = b && textArea(clip.text, aspectRatio(s))
+  if (!a) return null
+  const w = b.right - b.left
+  const h = b.bottom - b.top
+  return { left: round(b.left + a.x0 * w), top: round(b.top + a.y0 * h), right: round(b.left + a.x1 * w), bottom: round(b.top + a.y1 * h) }
+}
+// a transition's code compiled on the side: null, or what is wrong with it
+export function transitionError(source) {
+  if (!shared) {
+    const cv = document.createElement('canvas')
+    shared = { cv, r: createRenderer(cv) }
+  }
+  return shared.r.addTransition('__check', source)
+}
+
 // canvas pixels -> pixels of a layer
 function toLayer(s, clip) {
   const { ratio, sc } = letterbox(s, clip)
@@ -83,7 +129,7 @@ export function pictureSummary(s) {
         kind: c.text ? 'text' : c.raster ? 'pixels' : c.paint ? 'old paint' : 'picture',
         file: m ? m.name : undefined,
         text: c.text ? { ...c.text } : undefined,
-        box: layerBox(s, c),
+        box: c.text ? textBox(s, c) : layerBox(s, c),
         values: Object.keys(look).length ? look : undefined,
         blend: c.blend,
         effects: c.fx,
@@ -215,7 +261,7 @@ function drawShapes(cv, shapes, matrix) {
   }
 }
 
-const PICTURE_ONLY = new Set(['set_canvas', 'add_pixel_layer', 'duplicate_layer', 'set_layer', 'rasterize_layer', 'clear_layer', 'list_brushes', 'paint_stroke', 'smudge_stroke', 'draw_shape', 'flood_fill', 'pick_colour', 'select_area', 'smart_select', 'selection_action', 'export_picture', 'import_brush_pack', 'remove_brush_pack'])
+const PICTURE_ONLY = new Set(['set_canvas', 'add_pixel_layer', 'duplicate_layer', 'set_layer', 'rasterize_layer', 'clear_layer', 'paint_stroke', 'smudge_stroke', 'draw_shape', 'flood_fill', 'pick_colour', 'select_area', 'smart_select', 'selection_action', 'export_picture', 'import_brush_pack', 'remove_brush_pack'])
 export const isPictureTool = (name) => PICTURE_ONLY.has(name)
 
 // returns undefined for a tool that is not special in a picture project
@@ -312,15 +358,17 @@ export async function pictureTool(name, args, { p, h, ctx }) {
       await wait()
       return { text: 'Cleared.' }
     }
-    case 'list_brushes': {
-      const packs = await loadPacks()
-      const one = (b) => ({ id: b.id, name: b.name, size: b.size })
-      return json({ builtIn: live.kit.builtin.map(one), packs: packs.map((k) => ({ file: k.file, title: k.title, brushes: k.brushes.map(one) })) })
-    }
     case 'import_brush_pack': {
       need(Array.isArray(args.paths) && args.paths.length, 'Give at least one file path.')
+      const was = new Set(live.kit.packs.map((k) => k.file))
       await live.kit.importPacks(args.paths)
-      return { text: 'Imported. See list_brushes.' }
+      const fresh = (await loadPacks()).filter((k) => !was.has(k.file))
+      const bad = fresh.filter((k) => k.error || !k.brushes.length)
+      // a file that is not a brush pack is not kept
+      for (const k of bad) await live.kit.removePack(k, true)
+      const good = fresh.filter((k) => !bad.includes(k))
+      need(good.length, `That could not be read as a Krita brush pack${bad[0] && bad[0].error ? ': ' + bad[0].error.replace(/\.$/, '') : ''}.`)
+      return { text: `Imported ${good.map((k) => `${k.title} (${k.brushes.length} brushes)`).join(', ')}.${bad.length ? ` ${bad.length} file${bad.length === 1 ? ' was' : 's were'} not a brush pack and ${bad.length === 1 ? 'was' : 'were'} left out.` : ''} See list_brushes.` }
     }
     case 'remove_brush_pack': {
       const k = live.kit.packs.find((x) => x.file === args.file)
@@ -414,7 +462,7 @@ export async function pictureTool(name, args, { p, h, ctx }) {
       const mode = args.mode || 'replace'
       need(['replace', 'add', 'subtract'].includes(mode), 'mode is replace, add or subtract.')
       if (shape === 'none') live.setSel(null)
-      else if (shape === 'all') live.setSel(makeSelection(W, H, { type: 'all' }, 'replace', null))
+      else if (shape === 'all') live.setSel(mode === 'subtract' ? null : makeSelection(W, H, { type: 'all' }, 'replace', null))
       else if (shape === 'invert') {
         need(live.sel(), 'Nothing is selected yet.')
         live.setSel(invertSelection(W, H, live.sel()))

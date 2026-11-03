@@ -851,7 +851,8 @@ ipcMain.handle('app:setDirty', (_e, v) => {
 })
 // closing a project tab with unsaved changes: 0 = save, 1 = don't save, 2 = cancel
 ipcMain.handle('ui:askSave', (_e, name) =>
-  dialog.showMessageBoxSync(mainWindow, {
+  // (developer self-test: VIBE_ASKSAVE = the button to press, 0 save, 1 don't save, 2 cancel)
+  process.env.VIBE_SELFTEST && process.env.VIBE_ASKSAVE ? +process.env.VIBE_ASKSAVE : dialog.showMessageBoxSync(mainWindow, {
     type: 'question',
     buttons: ['Save', "Don't save", 'Cancel'],
     defaultId: 0,
@@ -1147,7 +1148,7 @@ const historyDir = (key) => {
   return d
 }
 const HISTORY_KEEP = 40
-ipcMain.handle('history:add', (_e, { key, json, label }) => {
+ipcMain.handle('history:add', (_e, { key, json, label, seconds }) => {
   const d = historyDir(key)
   const files = fs.readdirSync(d).filter((f) => f.endsWith('.json')).sort()
   if (files.length) {
@@ -1155,7 +1156,7 @@ ipcMain.handle('history:add', (_e, { key, json, label }) => {
       if (JSON.parse(fs.readFileSync(path.join(d, files[files.length - 1]), 'utf8')).json === json) return false // nothing changed
     } catch {}
   }
-  fs.writeFileSync(path.join(d, Date.now() + '.json'), JSON.stringify({ time: Date.now(), label: label || '', json }), 'utf8')
+  fs.writeFileSync(path.join(d, Date.now() + '.json'), JSON.stringify({ time: Date.now(), label: label || '', json, seconds }), 'utf8')
   for (const old of files.slice(0, Math.max(0, files.length + 1 - HISTORY_KEEP))) fs.rmSync(path.join(d, old), { force: true })
   return true
 })
@@ -1166,7 +1167,8 @@ ipcMain.handle('history:list', (_e, key) => {
     try {
       const v = JSON.parse(fs.readFileSync(path.join(d, f), 'utf8'))
       const p = JSON.parse(v.json)
-      const secs = (p.clips || []).reduce((a, c) => a + (c.out - c.in) / (c.speed > 0 ? c.speed : 1), 0)
+      // (older copies have no length of their own: the sum of the main clips, which ignores transitions and gaps)
+      const secs = v.seconds != null ? v.seconds : (p.clips || []).reduce((a, c) => a + (c.out - c.in) / (c.speed > 0 ? c.speed : 1), 0)
       out.push({ id: f, time: v.time, label: v.label, clips: (p.clips || []).length + (p.overlayClips || []).length, audio: (p.audioClips || []).length, seconds: secs })
     } catch {}
   }

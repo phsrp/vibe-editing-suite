@@ -1,25 +1,9 @@
 import { useMemo, useState } from 'react'
-import { layout, speedOf } from './state.js'
+import { sequenceWords } from './state.js'
 
 // "Edit by text": the words of the video on the main track, in order. Select words and delete them (the video is cut
 // and the gap closes), or remove every filler word ("um", "uh") or long pause in one go.
-const FILLER = /^(u+m+|u+h+|e+r+m*|a+h+|e+h+|h+m+|m+h*m+|uhm+)$/i
-const plain = (w) => String(w).toLowerCase().replace(/[^a-z']/g, '')
-
-// the words of the main track at their place on the timeline
-export function sequenceWords(state) {
-  const out = []
-  for (const c of layout(state.clips)) {
-    const tr = state.transcripts && state.transcripts[c.mediaId]
-    if (!tr || !tr.words || c.reverse) continue
-    const sp = speedOf(c)
-    for (const w of tr.words) {
-      if (w.s < c.in - 1e-6 || w.e > c.out + 1e-6) continue
-      out.push({ text: w.text, start: c.start + (w.s - c.in) / sp, end: c.start + (w.e - c.in) / sp, clip: c.id, filler: FILLER.test(plain(w.text)) })
-    }
-  }
-  return out.sort((a, b) => a.start - b.start)
-}
+export { sequenceWords }
 
 // the time to cut for a run of words: from just before the first to just after the last, never into the neighbours
 export function wordsRange(words, i0, i1) {
@@ -79,7 +63,7 @@ export default function TranscriptDialog({ state, dispatch, onClose }) {
       return
     }
     const secs = ranges.reduce((s, r) => s + (r[1] - r[0]), 0)
-    dispatch({ type: 'rippleDelete', ranges })
+    dispatch({ type: 'rippleDelete', ranges, tidy: true })
     setA(null)
     setB(null)
     setMsg(`Removed ${what} (${secs.toFixed(1)} seconds). Undo (Ctrl+Z) brings it back.`)

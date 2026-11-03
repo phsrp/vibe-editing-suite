@@ -223,6 +223,8 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
       return { el: cv, w: W, h: H }
     }
 
+    // how many videos are still on their way to the frame they should show (the AI connection waits for none)
+    let unsettled = 0
     function syncClip(clip, t, playing, media) {
       const e = getEl(clip, media)
       if (e.kind === 'video') {
@@ -249,6 +251,7 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
         } else {
           if (!v.paused) v.pause()
           if (Math.abs(v.currentTime - src) > 0.02 && !v.seeking) v.currentTime = src
+          if (v.seeking || v.readyState < 2 || Math.abs(v.currentTime - src) > 0.05) unsettled++
         }
         return v.readyState >= 2 ? { el: v, w: v.videoWidth, h: v.videoHeight } : null
       }
@@ -265,6 +268,7 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
         return
       }
       const s = stateRef.current
+      unsettled = 0
       // Auto quality: while playing, if frames come slower than about 25 per second, draw a bit coarser (at most every 2 s)
       if (qualityRef.current === 'auto') {
         const dt = now - lastFrameAt
@@ -422,6 +426,8 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
         missingSince = 0
         window.__held = 0
       }
+      // what is on screen now, and whether every picture in it is the right one
+      canvasRef.current.__drawn = { s, settled: !missing && !unsettled }
       if (!layers.length) {
         haveFrame = false
         return renderer.clear()

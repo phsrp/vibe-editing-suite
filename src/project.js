@@ -52,7 +52,7 @@ export async function restore(json) {
     const id = item ? item.id : m.id
     idMap.set(m.id, id)
     if (media.some((x) => x.id === id)) continue
-    if (item) media.push(item)
+    if (item) media.push({ ...item, name: m.name || item.name }) // (a name given in the editor, like a freeze frame's, stays)
     else {
       missing.push(m.name)
       media.push({ ...m, thumb: null, audioFiles: [], audioPending: false, missing: true })
@@ -152,7 +152,7 @@ export async function restoreImage(json) {
     const id = item ? item.id : m.id
     idMap.set(m.id, id)
     if (media.some((x) => x.id === id)) continue
-    if (item) media.push(item)
+    if (item) media.push({ ...item, name: m.name || item.name })
     else {
       missing.push(m.name)
       media.push({ ...m, thumb: null, audioFiles: [], audioPending: false, missing: true })

@@ -1,7 +1,6 @@
-- AI connection: an AI app can now use nearly the whole editor, in video and picture projects: over 100 things, from cutting and colour to captions, tracking and exporting
-- It can make pictures from scratch: layers, gradients, shapes, glows, cut-outs and real brushes, and it can look at a picture on your PC to copy its style
-- Ask "zoom in and track that person" and it follows them with normal keyframes you can edit
-- Long jobs show their progress with a Cancel button, and it still asks you first before anything like saving, exporting or using the microphone
-- Undo now covers markers: adding, removing, renaming and dragging them, and it puts them back after Edit by text cuts a section out
-- Fixed: AI apps were told that positive Position Y moves things up, when it moves them down
-- Fixed: saving picture projects again and again could slowly use up the editor's graphics, and could cost it the preview
+- Fixed: text that should be in Montserrat (the default) was shown in Arial, in the preview and in exports
+- Fixed: closing a project right after a change could skip the "save changes?" question and lose that change
+- Fixed: Edit by text left the removed words in the captions, could show a caption twice, and could leave tiny leftover clips
+- Fixed: making the picture canvas bigger or smaller moved picture layers and painted layers differently; every layer now stays where it was
+- Fixed: a freeze frame lost its name after saving and opening the project again, and versions showed the wrong length
+- AI connection: previews always show the right moment, impossible values are refused, deleting one grouped clip keeps the others, broken transitions are not saved, and the AI can read back sound settings, keyframe times and warps

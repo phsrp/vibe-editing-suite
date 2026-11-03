@@ -276,6 +276,7 @@ function cutRange(cur, t0, t1) {
     }
   }
   // items that sit anywhere in time (overlay clips and audio clips): cut, and move left what came after
+  const touched = new Set() // text clips the cut went through
   const timed = (list, lay) =>
     lay.flatMap((c) => {
       const orig = list.find((x) => x.id === c.id)
@@ -284,6 +285,12 @@ function cutRange(cur, t0, t1) {
       if (c.start >= t1 - 1e-6) return [{ ...orig, start: c.start - d }]
       const hasLeft = c.start < t0 - EPS
       const hasRight = end > t1 + EPS
+      // text is the same all the way through: it stays one clip, only shorter (two pieces would show the words twice)
+      if (c.text) {
+        touched.add(c.id)
+        const len = (hasLeft ? t0 - c.start : 0) + (hasRight ? end - t1 : 0)
+        return len > EPS ? [{ ...orig, start: hasLeft ? c.start : t0, out: orig.in + len * speedOf(c) }] : []
+      }
       const a = srcAt(c, t0)
       const b = srcAt(c, t1)
       const out = []
@@ -298,8 +305,28 @@ function cutRange(cur, t0, t1) {
   const overlayClips = timed(cur.overlayClips, overlayLayout(cur.overlayClips))
   const audioClips = timed(cur.audioClips, audioLayout(cur.audioClips))
   const markers = cur.markers.filter((m) => m.t < t0 || m.t >= t1).map((m) => (m.t >= t1 ? { ...m, t: m.t - d } : m))
-  return { clips, overlayClips, audioClips, markers }
+  return { clips, overlayClips, audioClips, markers, touched }
 }
+
+// The words said on the main track (from Captions), at their place on the timeline, in order
+const FILLER = /^(u+m+|u+h+|e+r+m*|a+h+|e+h+|h+m+|m+h*m+|uhm+)$/i
+const plainWord = (w) => String(w).toLowerCase().replace(/[^a-z']/g, '')
+export function sequenceWords(state) {
+  const out = []
+  for (const c of layout(state.clips)) {
+    const tr = state.transcripts && state.transcripts[c.mediaId]
+    if (!tr || !tr.words || c.reverse) continue
+    const sp = speedOf(c)
+    for (const w of tr.words) {
+      if (w.s < c.in - 1e-6 || w.e > c.out + 1e-6) continue
+      out.push({ text: w.text, start: c.start + (w.s - c.in) / sp, end: c.start + (w.e - c.in) / sp, clip: c.id, filler: FILLER.test(plainWord(w.text)) })
+    }
+  }
+  return out.sort((a, b) => a.start - b.start)
+}
+const joinWords = (ws) => ws.map((w) => String(w.text).trim()).join(' ').replace(/\s+([,.!?;:])/g, '$1')
+// the words whose middle is in [a, b)
+const wordsIn = (words, a, b) => words.filter((w) => (w.start + w.end) / 2 >= a && (w.start + w.end) / 2 < b)
 
 // Split ONLY the selected sound at time t (the picture and the other sounds stay whole).
 // A selected attached stream is detached first (it becomes a detached audio clip), then cut.
@@ -1457,10 +1484,41 @@ export function reducer(state, a) {
     // Cut time ranges out of the timeline and close the gaps ("edit by text"): ranges = [[t0, t1], ...] in seconds
     case 'rippleDelete': {
       if ((state.lockedRows || []).includes('main')) return state
-      const ranges = (a.ranges || []).filter((r) => r[1] - r[0] > 0.001).sort((p, q) => q[0] - p[0]) // last first, so earlier times stay valid
+      // cuts that (nearly) touch are one cut, or a sliver of a clip would be left between them
+      const merged = []
+      for (const r of (a.ranges || []).filter((x) => x[1] - x[0] > 0.001).sort((p, q) => p[0] - q[0])) {
+        const last = merged[merged.length - 1]
+        if (last && r[0] - last[1] < 0.2) last[1] = Math.max(last[1], r[1])
+        else merged.push([r[0], r[1]])
+      }
+      const ranges = merged.reverse() // last first, so earlier times stay valid
       if (!ranges.length) return state
       let cur = { clips: state.clips, overlayClips: state.overlayClips, audioClips: state.audioClips, markers: state.markers }
-      for (const [t0, t1] of ranges) cur = cutRange(cur, t0, t1)
+      const touched = new Set()
+      for (const [t0, t1] of ranges) {
+        cur = cutRange(cur, t0, t1)
+        cur.touched.forEach((id) => touched.add(id))
+      }
+      // editing by words (tidy): a scrap of a main track clip left between this cut and an earlier one is cut too, it is only a
+      // sliver of air. (Cuts at exact times stay exact.)
+      const same = (c) => state.clips.some((x) => x.id === c.id && x.in === c.in && x.out === c.out)
+      for (let n = 0; a.tidy && n < 20; n++) {
+        const scrap = layout(cur.clips).find((c) => c.dur < 0.2 && !same(c))
+        if (!scrap) break
+        cur = { ...cutRange(cur, scrap.start, scrap.start + scrap.dur), touched: cur.touched }
+        cur.touched.forEach((id) => touched.add(id))
+      }
+      // a caption made from speech that was cut through says only the words that are left (it goes if none are)
+      const before = sequenceWords(state)
+      const after = sequenceWords({ ...state, clips: cur.clips })
+      const spoken = new Set(overlayLayout(state.overlayClips).filter((c) => c.caption && touched.has(c.id) && wordsIn(before, c.start, c.start + c.dur).length).map((c) => c.id))
+      if (spoken.size) {
+        cur.overlayClips = overlayLayout(cur.overlayClips).flatMap(({ dur, ov, ...c }) => {
+          if (!spoken.has(c.id)) return [c]
+          const ws = wordsIn(after, c.start, c.start + dur)
+          return ws.length ? [{ ...c, text: { ...c.text, content: joinWords(ws) } }] : []
+        })
+      }
       return {
         ...commit(state, { clips: cur.clips, overlayClips: cur.overlayClips, audioClips: cur.audioClips }),
         markers: cur.markers,
@@ -1583,8 +1641,9 @@ export function reducer(state, a) {
       }
       return { ...state, selection: members }
     }
+    // exact = only these (not the rest of their groups)
     case 'selectMany':
-      return { ...state, selection: expand(state, a.ids) }
+      return { ...state, selection: a.exact ? a.ids : expand(state, a.ids) }
 
     case 'setPlayhead':
       return {
@@ -1613,11 +1672,31 @@ export function reducer(state, a) {
         lockedRows: a.lockedRows || [],
         hiddenRows: a.hiddenRows || [],
       }
+    // A new size grows or crops the canvas around its middle: every layer keeps its size and place in pixels.
+    // (Layers are sized in % of the canvas and fitted into it, so without this they would stretch along, each its own way.)
     case 'setCanvas': {
       const c = { ...state.canvas, ...a.patch }
       c.w = clamp(Math.round(c.w) || 16, 16, 16384)
       c.h = clamp(Math.round(c.h) || 16, 16, 16384)
-      return commit(state, { canvas: c })
+      const o = state.canvas
+      if (c.w === o.w && c.h === o.h) return commit(state, { canvas: c })
+      const r0 = o.w / o.h
+      const r1 = c.w / c.h
+      const overlayClips = state.overlayClips.map((clip) => {
+        const pic = clipPicture(state, clip, r0)
+        if (!pic || !pic.width || !pic.height) return clip
+        // a text layer is drawn as big as the canvas, so its picture changes shape with it
+        const ma0 = pic.width / pic.height
+        const ma1 = clip.text ? r1 : ma0
+        const k = (o.h / Math.max(1, ma0 / r0)) / (c.h / Math.max(1, ma1 / r1))
+        const fix = { x: (v) => (v * o.w) / c.w, y: (v) => (v * o.h) / c.h, scale: (v) => v * k }
+        const tf = { ...DEFAULTS, ...clip.tf }
+        for (const [p, f] of Object.entries(fix)) tf[p] = f(tf[p])
+        const anim = { ...clip.anim }
+        for (const [p, f] of Object.entries(fix)) if (anim[p]) anim[p] = anim[p].map((key) => ({ ...key, v: f(key.v) }))
+        return { ...clip, tf, anim }
+      })
+      return commit(state, { canvas: c, overlayClips })
     }
     case 'imgAddImage': {
       const m = state.media.find((x) => x.id === a.mediaId)

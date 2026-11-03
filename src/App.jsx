@@ -224,6 +224,7 @@ export default function App() {
     settings,
     setSettings,
     themes: customThemes,
+    theme,
     setTheme,
     binds,
     setBinds,

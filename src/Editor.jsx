@@ -224,7 +224,7 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
   const historyKey = () => projectRef.current || 'tab:' + tabId
   const snapshot = (label, json) => {
     lastSnap.current = Date.now()
-    window.api.historyAdd({ key: historyKey(), json: json || serialize(stateRef.current), label }).catch(() => {})
+    window.api.historyAdd({ key: historyKey(), json: json || serialize(stateRef.current), label, seconds: projectDuration(stateRef.current) }).catch(() => {})
   }
   const restoreJson = async (json) => {
     snapshot('Before restoring an older version')
@@ -252,7 +252,7 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
     setDirty(false)
     window.api.clearAutosave(tabId)
     rememberRecent(file, s)
-    window.api.historyAdd({ key: file, json, label: 'Saved' }).catch(() => {})
+    window.api.historyAdd({ key: file, json, label: 'Saved', seconds: projectDuration(s) }).catch(() => {})
     lastSnap.current = Date.now()
     flash('Project saved.')
     return true
@@ -265,7 +265,7 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
 
   // let the tab bar ask this project to save (when closing a tab)
   useEffect(() => {
-    registerHandle(tabId, { kind: 'video', save: () => saveProject(false), saveAs: (to) => saveProject(false, to), isDirty: () => dirtyRef.current, getState: () => stateRef.current, dispatch, addMedia, live: () => liveRef.current })
+    registerHandle(tabId, { kind: 'video', save: () => saveProject(false), saveAs: (to) => saveProject(false, to), isDirty: () => serialize(stateRef.current) !== savedJson.current, getState: () => stateRef.current, dispatch, addMedia, live: () => liveRef.current })
     return () => registerHandle(tabId, null)
   }, [])
 
