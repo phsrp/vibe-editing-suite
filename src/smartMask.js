@@ -1,7 +1,7 @@
 // Smart select and mask tracking with SAM 2 (Meta's open Segment Anything 2 model, see sam2.js). Draw a loop around a
 // subject and the AI finds its outline; tracking follows that outline through the video. It needs a graphics card:
 // the model files are downloaded once from Hugging Face (see electron/main.js, 'models:*').
-import { toUrl } from './state.js'
+import { setVideoSrc } from './state.js'
 import { MAX_POLY } from './masks.js'
 
 // What graphics card does this computer have? ok = a real one is usable (WebGPU); weak = probably too slow for comfort
@@ -264,7 +264,7 @@ async function follow({ file, startPts, times, paths, quad, onProgress, isCancel
   const v = document.createElement('video')
   v.muted = true
   v.preload = 'auto'
-  v.src = toUrl(file)
+  setVideoSrc(v, file)
   await new Promise((res, rej) => {
     v.onloadeddata = res
     v.onerror = () => rej(new Error('The video could not be opened'))

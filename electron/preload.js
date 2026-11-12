@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('api', {
   recentRepair: () => ipcRenderer.invoke('recent:repair'),
   recentRemove: (file) => ipcRenderer.invoke('recent:remove', file),
   copyText: (text) => ipcRenderer.invoke('clipboard:write', text),
+  indexAtEnd: (file) => ipcRenderer.sendSync('media:indexAtEnd', file),
   mcpInfo: () => ipcRenderer.invoke('mcp:info'),
   mcpResult: (r) => ipcRenderer.send('mcp:result', r),
   mcpAnswer: (r) => ipcRenderer.send('mcp:answer', r),

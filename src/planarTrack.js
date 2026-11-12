@@ -10,6 +10,8 @@
 //  3. fit: RANSAC (Fischler & Bolles 1981) over the points, then a least-squares refit of the good ones:
 //     Position (a shift), Position & Rotation (rigid), or Position, Scale & Rotation (similarity; Umeyama 1991)
 
+import { setVideoSrc } from './state.js'
+
 export const METHODS = [
   { id: 'position', label: 'Position', hint: 'It only moves' },
   { id: 'rotation', label: 'Position & rotation', hint: 'It moves and turns' },
@@ -337,11 +339,11 @@ export function trackStep(pa, pb, poly, method) {
 // ---- follow a mask through a video
 // startPts = the outline at second times[0], as [[x, y], ...] in 0..1 of the picture. times = the seconds to look at, in order.
 // Returns {frames: [{t, pts}], lost: null | 'text'}, or null when cancelled.
-export async function trackPlanar({ url, startPts, times, method = 'position', onProgress, isCancelled }) {
+export async function trackPlanar({ file, startPts, times, method = 'position', onProgress, isCancelled }) {
   const v = document.createElement('video')
   v.muted = true
   v.preload = 'auto'
-  v.src = url
+  setVideoSrc(v, file)
   await new Promise((res, rej) => {
     v.onloadeddata = res
     v.onerror = () => rej(new Error('The video could not be opened'))

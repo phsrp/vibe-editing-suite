@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Icon from './Icon.jsx'
 import { createRenderer } from './glRenderer.js'
-import { layout, overlayLayout, srcAt, toUrl, fmtTime, aspectRatio, previewSize } from './state.js'
+import { layout, overlayLayout, srcAt, toUrl, fmtTime, aspectRatio, previewSize, setVideoSrc } from './state.js'
 import { CC_SLIDERS, CC_DEFAULTS, CC_PRESETS } from './effects.js'
 
 // The Colour tab: colour correction for one clip. You see the picture change here as you move the sliders,
@@ -45,7 +45,7 @@ export default function ColourTab({ active, getProject, clipId, dispatchProject,
       el = document.createElement('video')
       el.muted = true
       el.preload = 'auto'
-      el.src = toUrl(media.path)
+      setVideoSrc(el, media.path)
       el.addEventListener('loadeddata', () => {
         el.currentTime = timeRef.current
       })

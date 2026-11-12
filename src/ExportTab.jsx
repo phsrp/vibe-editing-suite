@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Icon from './Icon.jsx'
-import { projectDuration } from './state.js'
+import { projectDuration, sectionOf, layout, overlayLayout, audioLayout } from './state.js'
 import { RESOLUTIONS, DEFAULT_BITRATE, defaultSettings, runExport, cancelExport, isExporting, frameSize } from './exporter.js'
 
 const ENCODERS = [
@@ -44,6 +44,47 @@ export function presetPatch(id, seconds) {
   return { ...patch, bitrate: +video.toFixed(2), res: video >= 3 ? '1080p' : '720p' }
 }
 
+// times for the "Part to export" boxes: 1:23.4 or 1:02:03.4, and back
+const clock = (t) => {
+  const v = Math.max(0, t)
+  const h = Math.floor(v / 3600)
+  const m = Math.floor((v % 3600) / 60)
+  const sec = (Math.floor((v % 60) * 10) / 10).toFixed(1).padStart(4, '0')
+  return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`
+}
+const parseClock = (text) => {
+  const parts = String(text).trim().split(':').map((p) => Number(p.trim()))
+  if (!parts.length || parts.length > 3 || parts.some((n) => !Number.isFinite(n) || n < 0)) return null
+  return parts.reduce((a, n) => a * 60 + n, 0)
+}
+// the time the selected clips cover, or null
+function selectedSpan(st) {
+  const items = [...layout(st.clips), ...overlayLayout(st.overlayClips), ...audioLayout(st.audioClips)].filter((c) => st.selection.includes(c.id))
+  return items.length ? [Math.min(...items.map((c) => c.start)), Math.max(...items.map((c) => c.start + c.dur))] : null
+}
+// the part of the timeline to export ([from, to] in seconds), or null for all of it
+function partRange(part, st) {
+  if (part.kind === 'selected') return selectedSpan(st)
+  if (part.kind === 'custom') return [Math.max(0, part.from), Math.min(part.to, projectDuration(st))]
+  return null
+}
+function TimeBox({ value, onChange }) {
+  return (
+    <input
+      type="text"
+      key={value}
+      defaultValue={clock(value)}
+      title="Minutes:seconds, or hours:minutes:seconds"
+      onBlur={(e) => {
+        const v = parseClock(e.target.value)
+        if (v == null) e.target.value = clock(value)
+        else onChange(v)
+      }}
+      onKeyDown={(e) => e.key === 'Enter' && e.target.blur()}
+    />
+  )
+}
+
 const fmtDur = (s) => {
   s = Math.max(0, Math.round(s))
   const h = Math.floor(s / 3600)
@@ -55,6 +96,7 @@ const fmtDur = (s) => {
 // The Export tab of a project: settings on the left, and on the right the video as it is being made.
 export default function ExportTab({ active, getProject, onStatus }) {
   const [s, setS] = useState(load)
+  const [part, setPart] = useState({ kind: 'all', from: 0, to: 0 }) // which part of the timeline to export
   const [phase, setPhase] = useState('settings') // settings | running | done | error
   const [prog, setProg] = useState({ pct: 0, label: '' })
   const [eta, setEta] = useState(null)
@@ -95,7 +137,11 @@ export default function ExportTab({ active, getProject, onStatus }) {
   }, [phase])
 
   const state = project.state
-  const duration = projectDuration(state)
+  const total = projectDuration(state)
+  const selSpan = selectedSpan(state)
+  const range = partRange(part, state)
+  const rangeOk = !range || range[1] - range[0] >= 0.5
+  const duration = range ? Math.max(0, range[1] - range[0]) : total
   const [rw, rh] = frameSize(s.res, state)
   const audioOnly = s.outputKind === 'audio'
   const presetInfo = PRESET_LIST.find((p) => p.id === s.preset)
@@ -111,8 +157,10 @@ export default function ExportTab({ active, getProject, onStatus }) {
     }
     const snap = getProject()
     setProject(snap)
+    const r = partRange(part, snap.state)
+    if (r && r[1] - r[0] < 0.5) return
     const ext = s.outputKind === 'audio' ? s.audioFormat : s.container
-    const file = await window.api.exportChooseOutput(`${snap.name || 'My video'}.${ext}`, ext)
+    const file = await window.api.exportChooseOutput(`${snap.name || 'My video'}${r ? ' (part)' : ''}.${ext}`, ext)
     if (!file) return
     setPhase('running')
     setErr('')
@@ -125,7 +173,7 @@ export default function ExportTab({ active, getProject, onStatus }) {
     try {
       const transitions = await window.api.listTransitions()
       const result = await runExport({
-        state: snap.state,
+        state: r ? sectionOf(snap.state, r[0], r[1]) : snap.state,
         settings: { ...s, encoder },
         transitions,
         outPath: file,
@@ -179,6 +227,35 @@ export default function ExportTab({ active, getProject, onStatus }) {
               <option key={p.id} value={p.id}>{p.label}</option>
             ))}
           </select>
+
+          <label>Part to export</label>
+          <select
+            disabled={running}
+            value={part.kind}
+            onChange={(e) => {
+              const kind = e.target.value
+              setPart((p) => (kind === 'custom' && !(p.to > p.from) ? { kind, from: 0, to: total } : { ...p, kind }))
+            }}
+          >
+            <option value="all">The whole video</option>
+            <option value="selected" disabled={!selSpan}>{selSpan ? `The selected clips (${clock(selSpan[0])} to ${clock(selSpan[1])})` : 'The selected clips (nothing is selected)'}</option>
+            <option value="custom">From one time to another</option>
+          </select>
+          {part.kind === 'custom' && (
+            <>
+              <label>From</label>
+              <span className="exp-time">
+                <TimeBox value={part.from} onChange={(v) => setPart((p) => ({ ...p, from: v }))} />
+                <button className="mini wide" disabled={running} onClick={() => setPart((p) => ({ ...p, from: state.playhead }))} title="The time where the playhead is in the editor">Playhead</button>
+              </span>
+              <label>To</label>
+              <span className="exp-time">
+                <TimeBox value={part.to} onChange={(v) => setPart((p) => ({ ...p, to: v }))} />
+                <button className="mini wide" disabled={running} onClick={() => setPart((p) => ({ ...p, to: state.playhead }))} title="The time where the playhead is in the editor">Playhead</button>
+              </span>
+            </>
+          )}
+          {range && !rangeOk && <div className="hint warn" style={{ gridColumn: '1 / -1' }}>The part must be at least half a second long, and "To" must come after "From".</div>}
 
           <label>Make</label>
           <select disabled={running} value={s.outputKind || 'video'} onChange={(e) => set({ outputKind: e.target.value })}>
@@ -300,13 +377,13 @@ export default function ExportTab({ active, getProject, onStatus }) {
                 : 'No graphics card was found on this PC.'}
           </b>
         </div>        <div className="hint left exp-info">
-          {state.clips.length + state.overlayClips.length} clip{state.clips.length + state.overlayClips.length === 1 ? '' : 's'} · length {fmtDur(duration)} · about {sizeText} at {rw}×{rh}. Muted tracks are not included.
+          {state.clips.length + state.overlayClips.length} clip{state.clips.length + state.overlayClips.length === 1 ? '' : 's'} · {range ? `the part from ${clock(range[0])} to ${clock(range[1])}, ` : ''}length {fmtDur(duration)} · about {sizeText} at {rw}×{rh}. Muted tracks are not included.
           {s.audioMode === 'separate' && ' Each audio track becomes its own audio stream in the file (switch between them in a player like VLC).'}
         </div>
         {phase === 'error' && <div className="exp-error">Export failed:<pre>{err}</pre></div>}
         <div className="export-actions">
           {!running && (
-            <button className="primary big" onClick={start} disabled={empty}>
+            <button className="primary big" onClick={start} disabled={empty || !rangeOk}>
               <Icon name="upload" size={16} /> {phase === 'done' ? 'Export again…' : 'Start export…'}
             </button>
           )}

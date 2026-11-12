@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, clipboard } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell, clipboard, protocol } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const crypto = require('crypto')
@@ -8,6 +8,13 @@ const { execFile } = require('child_process')
 const unpack = (p) => p.replace('app.asar', 'app.asar.unpacked')
 const ffmpegPath = unpack(require('ffmpeg-static'))
 const ffprobePath = unpack(require('ffprobe-static').path)
+
+// Recordings whose index is at the end open slowly in the preview: it gets them through vibe-media:// with the index first
+// (see fastIndex.js). The scheme has to be known before the app is ready.
+const fastIndex = require('./fastIndex.js')
+protocol.registerSchemesAsPrivileged([{ scheme: 'vibe-media', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, corsEnabled: true } }])
+app.whenReady().then(() => protocol.handle('vibe-media', fastIndex.serve))
+ipcMain.on('media:indexAtEnd', (e, file) => (e.returnValue = fastIndex.needsIt(String(file))))
 
 const IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif', '.tif', '.tiff']
 const VIDEO_EXT = ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'wmv', 'flv', 'mts', 'm2ts', 'mpg', 'mpeg']
@@ -206,6 +213,7 @@ ipcMain.handle('media:extractAudio', (_e, { file, id, streams }) => extractAudio
 async function describeFile(file) {
   const info = await probe(file)
   if (!info.type) throw new Error('Unsupported file: ' + file)
+  if (info.type === 'video') fastIndex.needsIt(file) // (works out now whether the preview needs the index moved, while the file is being read anyway)
   const st = fs.statSync(file)
   // same file => same id, so importing it twice does not duplicate it
   const id = crypto.createHash('sha1').update(`${file}|${st.size}|${st.mtimeMs}`).digest('hex').slice(0, 10)

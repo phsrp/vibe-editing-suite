@@ -1832,6 +1832,28 @@ export function reducer(state, a) {
 export const canGroup = (state) => reducer(state, { type: 'group' }) !== state
 export const canUngroup = (state) => reducer(state, { type: 'ungroup' }) !== state
 
+// Give a <video> its file. A recording whose index is at the end would take many seconds to open (or never, while its sound is
+// being read out at the same time): it comes through vibe-media://, as if the index were first (electron/fastIndex.js).
+const fastFiles = new Map() // path -> true / false
+export function setVideoSrc(el, p) {
+  let fast = fastFiles.get(p)
+  if (fast == null) {
+    try {
+      fast = !!(typeof window !== 'undefined' && window.api && window.api.indexAtEnd && window.api.indexAtEnd(p))
+    } catch {
+      fast = false
+    }
+    fastFiles.set(p, fast)
+  }
+  if (fast) {
+    el.crossOrigin = 'anonymous' // (another origin: without this the picture could not be drawn with WebGL)
+    el.src = 'vibe-media://file/' + encodeURIComponent(p)
+  } else {
+    el.removeAttribute('crossorigin')
+    el.src = toUrl(p)
+  }
+}
+
 export function toUrl(p) {
   return 'file:///' + encodeURI(p.replace(/\\/g, '/')).replace(/#/g, '%23').replace(/\?/g, '%3F')
 }
@@ -1847,9 +1869,23 @@ export function fmtDur(t) {
   return `${m}m ${String(s).padStart(2, '0')}s`
 }
 
+// Only the part a..b (seconds on the timeline) of a project, starting at 0: everything before and after it is cut away
+// on every track, the same way Edit by text cuts (used to export a part of the video)
+export function sectionOf(state, a, b) {
+  const total = projectDuration(state)
+  const ranges = []
+  if (b < total - 0.001) ranges.push([b, total + 1])
+  if (a > 0.001) ranges.push([0, a])
+  if (!ranges.length) return state
+  const cut = reducer({ ...state, lockedRows: [] }, { type: 'rippleDelete', ranges })
+  return { ...cut, lockedRows: state.lockedRows, selection: [], playhead: 0 }
+}
+
 export function fmtTime(t) {
   const m = Math.floor(t / 60)
   const s = Math.floor(t % 60)
   const f = Math.floor((t % 1) * 30)
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}:${String(f).padStart(2, '0')}`
 }
+
+if (typeof window !== 'undefined') window.__stateMod = { setVideoSrc, sectionOf } // used by the developer self-test

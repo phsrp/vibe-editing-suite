@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { layout, overlayLayout, soleVideoClip, srcAt, speedOf, aspectRatio, clipPicture, toUrl } from './state.js'
+import { layout, overlayLayout, soleVideoClip, srcAt, speedOf, aspectRatio, clipPicture } from './state.js'
 import { evalTransform, evalProp, keyAt, PROPS, rectToFrame, frameToRect } from './motion.js'
 import { maskPlaced, polyCentre, MAX_POLY, maskAt, frameAt } from './masks.js'
 
@@ -57,7 +57,7 @@ function TrackDialog({ clip, state, media, dispatch, onClose, fix, startPts }) {
       if (fix && !(len >= 0.1)) throw new Error('There is nothing after this moment to track.')
       const n = Math.max(2, Math.min(900, Math.round(len * 30)) + 1)
       const times = Array.from({ length: n }, (_, i) => ts + ((end - ts) * i) / (n - 1))
-      const r = await trackPlanar({ url: toUrl(media.path), startPts: fix ? startPts : clip.mask.pts, times, method, onProgress: (d, t) => setProg([d, t]), isCancelled: () => cancel.current })
+      const r = await trackPlanar({ file: media.path, startPts: fix ? startPts : clip.mask.pts, times, method, onProgress: (d, t) => setProg([d, t]), isCancelled: () => cancel.current })
       if (!r) return onClose()
       if (r.frames.length < 2) throw new Error('It could not follow this: ' + (r.lost || 'not enough detail inside the mask') + '.')
       const last = r.frames[r.frames.length - 1].t

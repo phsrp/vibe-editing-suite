@@ -1,7 +1,7 @@
 // The AI connection, page side: what each tool does (the list and its descriptions are in electron/mcpTools.js).
 // An AI app goes through the same actions as the buttons, so its changes show up at once and Ctrl+Z takes them back.
 // mcpApp.js = the editor as a whole, mcpPicture.js = what is special in picture projects, this file = the rest.
-import { layout, overlayLayout, audioLayout, srcAt, tlOf, projectDuration, rowKeys, hasAttached, isLocked, streamCount, streamAudioOf, audioClipVol, copySelection, clipPicture, aspectRatio, ASPECTS, uid } from './state.js'
+import { layout, overlayLayout, audioLayout, srcAt, tlOf, projectDuration, sectionOf, rowKeys, hasAttached, isLocked, streamCount, streamAudioOf, audioClipVol, copySelection, clipPicture, aspectRatio, ASPECTS, uid } from './state.js'
 import { evalProp, keyAt, PROPS, EASES, WARP_ZERO } from './motion.js'
 import { CC_DEFAULTS, CC_SLIDERS, CC_PRESETS, FX_SLIDERS } from './effects.js'
 import { TEXT_PRESETS } from './textRender.js'
@@ -783,6 +783,11 @@ export async function runTool(name, args, ctxRef) {
       }
       for (const k of ['res', 'fps', 'codec', 'bitrate', 'container', 'speed', 'audioKbps', 'encoder', 'loudness', 'audioFormat']) if (args[k] != null) st[k] = args[k]
       if (args.soundOnly) st.outputKind = 'audio'
+      const total = projectDuration(s)
+      const a = args.from == null ? 0 : +args.from
+      const b = args.to == null ? total : Math.min(+args.to, total)
+      const part = args.from != null || args.to != null
+      if (part) need(a >= 0 && b - a >= 0.5, `from and to must give at least half a second of the video, which is ${round(total)} s long.`)
       const ext = st.outputKind === 'audio' ? st.audioFormat : st.container
       need(String(args.path || '').toLowerCase().endsWith('.' + ext), `For these settings the path must end in .${ext}.`)
       const enc = await window.api.exportEncoders()
@@ -791,7 +796,7 @@ export async function runTool(name, args, ctxRef) {
         onCancel(cancelExport)
         let check = null
         const transitions = await window.api.listTransitions()
-        const file = await runExport({ state: state(), settings: st, transitions, outPath: args.path, onCheck: (c) => (check = c), onProgress: (x) => progress(Math.round(x.pct), 100, x.label) })
+        const file = await runExport({ state: part ? sectionOf(state(), a, b) : state(), settings: st, transitions, outPath: args.path, onCheck: (c) => (check = c), onProgress: (x) => progress(Math.round(x.pct), 100, x.label) })
         return { file, check }
       })
       return json({ state: 'started', next: 'Call check_job every 15 seconds or so until it says done. The person sees the progress and can cancel.' })

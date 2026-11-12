@@ -1,6 +1,6 @@
 // "Zoom in and follow that person" for the AI connection. SAM 2 follows the subject through the clip, and the path it took
 // becomes normal Position X, Position Y and Scale keyframes, like a camera operator keeping them in frame.
-import { aspectRatio, toUrl } from './state.js'
+import { aspectRatio, setVideoSrc } from './state.js'
 import { evalProp, evalTransform, frameToRect } from './motion.js'
 import { startJob } from './mcpJobs.js'
 
@@ -160,7 +160,7 @@ export const openedVideo = (file, t) =>
       v.onseeked = () => res(v)
       v.currentTime = t
     }
-    v.src = file
+    setVideoSrc(v, file)
   })
 
 // the outline of what is in `prompt`, in the clip's own picture (0..1, y down), or null
@@ -169,7 +169,7 @@ export async function subjectOutline({ el, w, h, prompt, paths }) {
   return findSubjectPrompt({ el, w, h, prompt, paths })
 }
 async function outlineAt(file, ts, prompt, paths) {
-  const v = await openedVideo(toUrl(file), ts)
+  const v = await openedVideo(file, ts)
   try {
     return await subjectOutline({ el: v, w: v.videoWidth, h: v.videoHeight, prompt, paths })
   } finally {
@@ -238,7 +238,7 @@ export function startTrackMask({ handle, clip, media, ts, end, engine, method, q
     let lost
     if (engine === 'quick') {
       const { trackPlanar } = await import('./planarTrack.js')
-      const r = await trackPlanar({ url: toUrl(media.path), startPts: clip.mask.pts, times, method, onProgress, isCancelled: cancelled })
+      const r = await trackPlanar({ file: media.path, startPts: clip.mask.pts, times, method, onProgress, isCancelled: cancelled })
       if (!r) throw new Error('cancelled')
       if (r.frames.length < 2) throw new Error('It could not follow this: ' + (r.lost || 'not enough detail inside the mask') + '.')
       frames = r.frames

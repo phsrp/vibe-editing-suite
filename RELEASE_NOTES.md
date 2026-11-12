@@ -1,6 +1,4 @@
-- Fixed: text that should be in Montserrat (the default) was shown in Arial, in the preview and in exports
-- Fixed: closing a project right after a change could skip the "save changes?" question and lose that change
-- Fixed: Edit by text left the removed words in the captions, could show a caption twice, and could leave tiny leftover clips
-- Fixed: making the picture canvas bigger or smaller moved picture layers and painted layers differently; every layer now stays where it was
-- Fixed: a freeze frame lost its name after saving and opening the project again, and versions showed the wrong length
-- AI connection: previews always show the right moment, impossible values are refused, deleting one grouped clip keeps the others, broken transitions are not saved, and the AI can read back sound settings, keyframe times and warps
+- Long recordings open straight away: a 2-hour, 38 GB recording now shows in the preview in about 0.2 seconds (before: never), and jumping around it takes a few hundredths of a second
+- Export a part of your video: the whole video, the selected clips, or from one time to another (new "Part to export" in the Export tab)
+- A video that is still opening shows a message instead of a black preview
+- AI connection: export_video can export a part (from, to)

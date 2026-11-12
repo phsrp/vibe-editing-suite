@@ -3,7 +3,7 @@ import { createRenderer } from './glRenderer.js'
 import { evalTransform, evalWarp } from './motion.js'
 import { maskAt } from './masks.js'
 import { routeOutput, onDevices } from './audioDevices.js'
-import { layout, overlayLayout, audioLayout, audioSource, totalDuration, projectDuration, videoRowsBottomUp, toUrl, srcAt, speedOf, aspectRatio, previewSize, streamAudioOf, cleanActive, envAt, fadeAt } from './state.js'
+import { layout, overlayLayout, audioLayout, audioSource, totalDuration, projectDuration, videoRowsBottomUp, toUrl, setVideoSrc, srcAt, speedOf, aspectRatio, previewSize, streamAudioOf, cleanActive, envAt, fadeAt } from './state.js'
 import WarpOverlay from './WarpOverlay.jsx'
 import { drawText, loadFont } from './textRender.js'
 import TransformOverlay from './TransformOverlay.jsx'
@@ -60,10 +60,11 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
     function ensureSrc(e, media) {
       if (e.kind === 'video' && !e.srcPath) {
         e.srcPath = playPath(media)
-        e.el.src = toUrl(e.srcPath)
+        setVideoSrc(e.el, e.srcPath)
       }
     }
 
+    const slowFiles = new Set() // files that took more than 3 s to open
     function getEl(clip, media) {
       let e = els.current.get(clip.id)
       if (e) return e
@@ -73,12 +74,20 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
         el.preload = 'auto'
         el.playsInline = true
         el.muted = true // sound comes from the separately extracted audio streams
-        el.src = toUrl(playPath(media))
+        setVideoSrc(el, playPath(media))
       } else {
         el = new Image()
         el.src = toUrl(media.path)
       }
-      e = { el, kind: media.type, media, srcPath: media.type === 'video' ? playPath(media) : media.path }
+      e = { el, kind: media.type, media, srcPath: media.type === 'video' ? playPath(media) : media.path, loadStart: performance.now() }
+      if (media.type === 'video') {
+        // some recordings take many seconds to open (a long file saved in small pieces, with its index at the end): remember
+        // which, so they are given that time and are not let go of when far from the playhead (opening them again is slow)
+        el.addEventListener('loadstart', () => (e.loadStart = performance.now()))
+        el.addEventListener('loadedmetadata', () => {
+          if (performance.now() - e.loadStart > 3000 && e.srcPath === media.path) slowFiles.add(media.path)
+        })
+      }
       els.current.set(clip.id, e)
       return e
     }
@@ -241,7 +250,7 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
         }
         if (e.srcPath !== want) {
           e.srcPath = want
-          v.src = toUrl(want)
+          setVideoSrc(v, want)
         }
         if (v.playbackRate !== speedOf(clip)) v.playbackRate = speedOf(clip)
         playing = playing && canPlay
@@ -386,7 +395,7 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
       for (const c of overlays) span.set(c.id, [c.start, c.start + c.dur])
       for (const [id, e] of els.current) {
         const sp = span.get(id)
-        if (e.kind !== 'video' || !e.srcPath || actIds.has(id) || !sp) continue
+        if (e.kind !== 'video' || !e.srcPath || actIds.has(id) || !sp || slowFiles.has(e.srcPath)) continue
         if (sp[0] > t + 10 || sp[1] < t - 6) {
           e.el.pause()
           e.el.removeAttribute('src')
@@ -414,17 +423,28 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
         const held = now - missingSince
         if (held > 1200) {
           for (const [id, e] of els.current) {
-            if (e.kind === 'video' && actIds.has(id) && e.el.readyState < 2 && now - (e.reloaded || 0) > 2000) {
+            // a video that is still opening its file (no error, nothing known yet) is left alone for up to 2 minutes
+            const opening = e.el.readyState === 0 && e.el.networkState === 2 && !e.el.error && now - (e.loadStart || 0) < 120000
+            if (e.kind === 'video' && actIds.has(id) && e.el.readyState < 2 && !opening && now - (e.reloaded || 0) > 2000) {
               e.reloaded = now
               e.srcPath = null // the next syncClip sets the source again, which loads the video afresh
             }
           }
         }
         window.__held = held // developer self-test
+        const waiting = held > 1500 && [...els.current].some(([id, e]) => e.kind === 'video' && actIds.has(id) && e.el.readyState === 0 && e.el.networkState === 2)
+        if (waiting !== openingRef.current) {
+          openingRef.current = waiting
+          setOpening(waiting)
+        }
         if (haveFrame && held < 4000) return
       } else {
         missingSince = 0
         window.__held = 0
+        if (openingRef.current) {
+          openingRef.current = false
+          setOpening(false)
+        }
       }
       // what is on screen now, and whether every picture in it is the right one
       canvasRef.current.__drawn = { s, settled: !missing && !unsettled }
@@ -470,6 +490,8 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
   const wrapRef = useRef(null)
   const ratio = aspectRatio(state)
   const [zoom, setZoomState] = useState(1)
+  const [opening, setOpening] = useState(false) // a video is still opening its file (big recordings can take a while)
+  const openingRef = useRef(false)
   const [fitBox, setFitBox] = useState({ w: 640, h: 360 })
   const zoomRef = useRef(1)
   const [cw0, ch0] = previewSize(ratio)
@@ -564,6 +586,12 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
     <div className="preview-wrap" ref={wrapRef} onWheel={onWheel} onPointerDown={onPan} onAuxClick={(e) => e.preventDefault()}>
       <div className="preview-box" style={{ width: box.w, height: box.h }}>
         <canvas ref={canvasRef} width={cw} height={ch} className="preview-canvas" />
+        {opening && (
+          <div className="pv-opening">
+            Opening the video… Long recordings can take a while: this one is stored in many small pieces. When the smooth preview copy
+            is ready (it is made in the background, see the file's progress on the left) it opens straight away.
+          </div>
+        )}
         {mode === 'warp' && <WarpOverlay state={state} dispatch={dispatch} />}
         {mode === 'transform' && <TransformOverlay state={state} dispatch={dispatch} free={freeMode} box={box} />}
         {(mode === 'mask' || mode === 'maskdraw' || mode === 'maskpoly' || mode === 'maskdrawsmart') && (

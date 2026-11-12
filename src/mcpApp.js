@@ -224,7 +224,7 @@ export async function appTool(name, args, ctxRef) {
     case 'view_file': {
       const file = String(args.path)
       if (/\.(mp4|mov|mkv|webm|avi|m4v)$/i.test(file)) {
-        const v = await openedVideo(toUrl(file), +args.time || 0).catch(() => {
+        const v = await openedVideo(file, +args.time || 0).catch(() => {
           throw new Error(`${file} could not be opened. Is the path right?`)
         })
         const image = photo(v, v.videoWidth, v.videoHeight)
