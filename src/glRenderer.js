@@ -1,5 +1,6 @@
 import { shaderTransform } from './motion.js'
 import { MAX_POLY } from './masks.js'
+import { lutNow, lutPixels } from './luts.js'
 
 // WebGL renderer. Draws one frame, or two frames blended by a gl-transitions shader.
 //
@@ -48,10 +49,22 @@ uniform vec3 kcA; uniform vec3 kcB;
 uniform vec2 szA; uniform vec2 szB;
 // the picture already blurred (a real Gaussian blur, made in passes of its own before the layer is drawn; see blurPass)
 uniform sampler2D blA; uniform sampler2D blB;
-struct Fx { vec4 f; vec4 c1; vec4 c2; vec4 k; vec3 kc; vec2 sz; };
+// LUT (a colour look): the table as N slices side by side (N*N x N), lu = (N, strength 0..1)
+uniform sampler2D ltA; uniform sampler2D ltB;
+uniform vec2 luA; uniform vec2 luB;
+struct Fx { vec4 f; vec4 c1; vec4 c2; vec4 k; vec3 kc; vec2 sz; vec2 lu; };
+vec3 lut3(sampler2D lt, vec3 c, float n) {
+  float b = c.b * (n - 1.0);
+  float b0 = floor(b);
+  float b1 = min(b0 + 1.0, n - 1.0);
+  vec2 rg = (c.rg * (n - 1.0) + 0.5) / vec2(n * n, n);
+  vec3 s0 = texture2D(lt, vec2(rg.x + b0 / n, rg.y)).rgb;
+  vec3 s1 = texture2D(lt, vec2(rg.x + b1 / n, rg.y)).rgb;
+  return mix(s0, s1, b - b0);
+}
 vec2 cbcr(vec3 c) { return vec2(-0.169 * c.r - 0.331 * c.g + 0.5 * c.b, 0.5 * c.r - 0.419 * c.g - 0.081 * c.b); }
 // sample the picture at q and apply the effects: chroma key, blur / sharpen, glow, colour correction, vignette
-vec4 shade(sampler2D t, sampler2D bl, vec2 q, Fx x) {
+vec4 shade(sampler2D t, sampler2D bl, sampler2D lt, vec2 q, Fx x) {
   vec2 px = 1.0 / x.sz;
   vec4 col = texture2D(t, q);
   if (x.k.w > 0.5) {
@@ -99,6 +112,7 @@ vec4 shade(sampler2D t, sampler2D bl, vec2 q, Fx x) {
   c += x.c2.z * smoothstep(0.5, 1.0, lum) * 0.3;
   c += x.c2.w * (1.0 - smoothstep(0.0, 0.5, lum)) * 0.3;
   col.rgb = clamp(c, 0.0, 1.0);
+  if (x.lu.y > 0.001) col.rgb = mix(col.rgb, lut3(lt, col.rgb, x.lu.x), x.lu.y);
   if (x.f.z > 0.001) {
     vec2 cq = (q - 0.5) * 2.0;
     col.rgb *= 1.0 - x.f.z * smoothstep(0.35, 1.5, dot(cq, cq));
@@ -148,7 +162,7 @@ float maskAlpha(vec2 q, Mk m, sampler2D mp) {
   return m.k.z > 0.5 ? 1.0 - al : al;
 }
 // Result is premultiplied: transparent outside the picture, so layers can be stacked.
-vec4 sampleSrc(sampler2D t, sampler2D bl, vec2 s, vec4 tf, vec2 p, vec2 st, Fx fx, Mk mk, sampler2D mp, mat3 h, float w, vec2 uv) {
+vec4 sampleSrc(sampler2D t, sampler2D bl, sampler2D lt, vec2 s, vec4 tf, vec2 p, vec2 st, Fx fx, Mk mk, sampler2D mp, mat3 h, float w, vec2 uv) {
   vec2 c = uv - 0.5;
   if (p.y > 0.5) {
     // inverse of: scale, rotate (clockwise), then move
@@ -165,7 +179,7 @@ vec4 sampleSrc(sampler2D t, sampler2D bl, vec2 s, vec4 tf, vec2 p, vec2 st, Fx f
     if (hv.z < 0.0001) return vec4(0.0);
     q = hv.xy / hv.z;
     if (q.x < 0.0 || q.x > 1.0 || q.y < 0.0 || q.y > 1.0) return vec4(0.0);
-    vec4 tx = shade(t, bl, q, fx);
+    vec4 tx = shade(t, bl, lt, q, fx);
     tx.a *= maskAlpha(q, mk, mp);
     return vec4(tx.rgb * tx.a * p.x, tx.a * p.x);
   }
@@ -175,12 +189,12 @@ vec4 sampleSrc(sampler2D t, sampler2D bl, vec2 s, vec4 tf, vec2 p, vec2 st, Fx f
     if (s.x > 1.0001 && (q.x < 0.0 || q.x > 1.0)) return vec4(0.0);
     if (s.y > 1.0001 && (q.y < 0.0 || q.y > 1.0)) return vec4(0.0);
   }
-  vec4 tx = shade(t, bl, clamp(q, 0.0, 1.0), fx);
+  vec4 tx = shade(t, bl, lt, clamp(q, 0.0, 1.0), fx);
   tx.a *= maskAlpha(q, mk, mp);
   return vec4(tx.rgb * tx.a * p.x, tx.a * p.x);
 }
-vec4 getFromColor(vec2 uv) { return sampleSrc(from, blA, sA, tfA, pA, stA, Fx(fA, c1A, c2A, kA, kcA, szA), Mk(mkA, mbA, mrA, mnA, mbbA), mpA, hA, wA, uv); }
-vec4 getToColor(vec2 uv) { return sampleSrc(to, blB, sB, tfB, pB, stB, Fx(fB, c1B, c2B, kB, kcB, szB), Mk(mkB, mbB, mrB, mnB, mbbB), mpB, hB, wB, uv); }
+vec4 getFromColor(vec2 uv) { return sampleSrc(from, blA, ltA, sA, tfA, pA, stA, Fx(fA, c1A, c2A, kA, kcA, szA, luA), Mk(mkA, mbA, mrA, mnA, mbbA), mpA, hA, wA, uv); }
+vec4 getToColor(vec2 uv) { return sampleSrc(to, blB, ltB, sB, tfB, pB, stB, Fx(fB, c1B, c2B, kB, kcB, szB, luB), Mk(mkB, mbB, mrB, mnB, mbbB), mpB, hB, wB, uv); }
 `
 const BLEND_GLSL = `
 // Blend modes (picture editor layers): the layer is mixed with what is already drawn under it (dstTex, a copy of it)
@@ -314,6 +328,40 @@ export function createRenderer(canvas) {
     gl.activeTexture(gl.TEXTURE0 + unit)
     gl.bindTexture(gl.TEXTURE_2D, tx)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]))
+  }
+
+  // ---- LUTs (colour looks): each table becomes a texture once and stays on the graphics card ----
+  const lutsOk = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) >= 10
+  const lutDummy = makeTex(8)
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]))
+  if (lutsOk) {
+    gl.activeTexture(gl.TEXTURE9)
+    gl.bindTexture(gl.TEXTURE_2D, lutDummy)
+  }
+  const lutTex = new Map() // table -> texture
+  function bindLut(unit, fx) {
+    if (!lutsOk) return
+    const t = fx && fx.lut && fx.lut.file && (fx.lut.mix ?? 100) > 0 ? lutNow(fx.lut.file) : null
+    gl.activeTexture(gl.TEXTURE0 + unit)
+    if (!t) return gl.bindTexture(gl.TEXTURE_2D, lutDummy)
+    let tex = lutTex.get(t)
+    if (!tex) {
+      tex = gl.createTexture()
+      gl.bindTexture(gl.TEXTURE_2D, tex)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, t.n * t.n, t.n, 0, gl.RGBA, gl.UNSIGNED_BYTE, lutPixels(t))
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true)
+      lutTex.set(t, tex)
+      if (lutTex.size > 12) {
+        const [old, ot] = lutTex.entries().next().value
+        gl.deleteTexture(ot)
+        lutTex.delete(old)
+      }
+    } else gl.bindTexture(gl.TEXTURE_2D, tex)
   }
 
   // ---- Gaussian blur, in passes of its own ----
@@ -455,7 +503,7 @@ export function createRenderer(canvas) {
     return {
       prog,
       extras,
-      loc: { from: u('from'), to: u('to'), progress: u('progress'), ratio: u('ratio'), sA: u('sA'), sB: u('sB'), tfA: u('tfA'), tfB: u('tfB'), pA: u('pA'), pB: u('pB'), stA: u('stA'), stB: u('stB'), hA: u('hA'), hB: u('hB'), wA: u('wA'), wB: u('wB'), fA: u('fA'), fB: u('fB'), c1A: u('c1A'), c1B: u('c1B'), c2A: u('c2A'), c2B: u('c2B'), kA: u('kA'), kB: u('kB'), kcA: u('kcA'), kcB: u('kcB'), szA: u('szA'), szB: u('szB'), mkA: u('mkA'), mkB: u('mkB'), mbA: u('mbA'), mbB: u('mbB'), mrA: u('mrA'), mrB: u('mrB'), mnA: u('mnA'), mnB: u('mnB'), mpA: u('mpA'), mpB: u('mpB'), mbbA: u('mbbA'), mbbB: u('mbbB'), blA: u('blA'), blB: u('blB'), dstTex: u('dstTex'), bmode: u('bmode'), vp: u('vp') },
+      loc: { from: u('from'), to: u('to'), progress: u('progress'), ratio: u('ratio'), sA: u('sA'), sB: u('sB'), tfA: u('tfA'), tfB: u('tfB'), pA: u('pA'), pB: u('pB'), stA: u('stA'), stB: u('stB'), hA: u('hA'), hB: u('hB'), wA: u('wA'), wB: u('wB'), fA: u('fA'), fB: u('fB'), c1A: u('c1A'), c1B: u('c1B'), c2A: u('c2A'), c2B: u('c2B'), kA: u('kA'), kB: u('kB'), kcA: u('kcA'), kcB: u('kcB'), szA: u('szA'), szB: u('szB'), mkA: u('mkA'), mkB: u('mkB'), mbA: u('mbA'), mbB: u('mbB'), mrA: u('mrA'), mrB: u('mrB'), mnA: u('mnA'), mnB: u('mnB'), mpA: u('mpA'), mpB: u('mpB'), mbbA: u('mbbA'), mbbB: u('mbbB'), blA: u('blA'), blB: u('blB'), ltA: u('ltA'), ltB: u('ltB'), luA: u('luA'), luB: u('luB'), dstTex: u('dstTex'), bmode: u('bmode'), vp: u('vp') },
     }
   }
 
@@ -484,6 +532,8 @@ export function createRenderer(canvas) {
     gl.uniform1i(p.loc.to, 1)
     gl.uniform1i(p.loc.blA, 4)
     gl.uniform1i(p.loc.blB, 5)
+    gl.uniform1i(p.loc.ltA, 8)
+    gl.uniform1i(p.loc.ltB, 9)
     gl.uniform1i(p.loc.dstTex, 7)
     gl.uniform1f(p.loc.bmode, curBlend)
     gl.uniform2f(p.loc.vp, canvas.width, canvas.height)
@@ -508,6 +558,7 @@ export function createRenderer(canvas) {
       gl.uniform4f(p.loc['k' + side], ...tt.fu.k)
       gl.uniform3f(p.loc['kc' + side], ...tt.fu.kc)
       gl.uniform2f(p.loc['sz' + side], Math.max(1, dd[0]), Math.max(1, dd[1]))
+      gl.uniform2f(p.loc['lu' + side], ...(lutsOk ? tt.fu.lu : [2, 0]))
       gl.uniform4f(p.loc['mk' + side], ...tt.mu.mk)
       gl.uniform4f(p.loc['mb' + side], ...tt.mu.mb)
       gl.uniform2f(p.loc['mr' + side], ...tt.mu.mr)
@@ -609,6 +660,8 @@ export function createRenderer(canvas) {
     gl.bindTexture(gl.TEXTURE_2D, bA || blurDummyA)
     gl.activeTexture(gl.TEXTURE5)
     gl.bindTexture(gl.TEXTURE_2D, bB || blurDummyB)
+    bindLut(8, A.fx)
+    bindLut(9, B ? B.fx : null)
     curBlend = blend || 0
     if (curBlend) {
       // a blend mode needs to see what is under the layer: a copy of the picture so far, which the shader mixes the layer into

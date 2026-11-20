@@ -35,11 +35,11 @@ An AI app on your PC, such as Claude, can use the whole editor for you while it 
 
 **What it can do:** nearly everything you can do with the mouse.
 
-- **Video:** see the picture at any moment, and cut, trim, move and arrange clips and tracks, with text, keyframes, speed, transitions, effects, colour, green screen, masks, sound clean-up and markers. It can also write new transitions.
+- **Video:** see the picture at any moment, and cut, trim, move and arrange clips and tracks, with text, keyframes, speed, transitions, effects, colour, LUTs, green screen, masks, steadying shaky clips, sound clean-up and markers. It can use the trim tools (ripple, roll, slip, slide), In and Out marks and nests, measure how loud the sound is, and write new transitions.
 - **Tracking:** "zoom in and track that person" follows them with normal keyframes you can edit, and masks can follow a subject too.
 - **Captions and speech:** make captions from speech, cut words, filler words and pauses out by text, save subtitles.
 - **Pictures:** make thumbnails and posters with layers, blend modes, gradients, shapes and glows, cut a subject out of its background, paint with real brushes, make selections, and look at a picture on your PC to copy its style.
-- **Finishing:** save projects, go back to earlier versions, and export videos (all of it or a part) and pictures, with long jobs showing their progress and a Cancel button.
+- **Finishing:** save projects, go back to earlier versions, and export videos (all of it, a part, the part between the In and Out marks, or chosen clips) and pictures, with long jobs showing their progress and a Cancel button.
 - **The editor itself:** open and switch projects, and change settings, themes and shortcuts.
 
 Tracking and smart cut-outs use the tracking AI model, and captions use the speech model. If one is missing, the AI can download it after you allow it.

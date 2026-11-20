@@ -31,6 +31,8 @@ export const initialState = {
   markers: [], // {id, t, label}: flags on the timeline ruler
   lockedRows: [], // row keys that cannot be edited
   hiddenRows: [], // row keys that are switched off (video: not shown or exported, audio: silent)
+  rowH: {}, // {[row key]: height in px} for tracks made taller or shorter (the rest use the default)
+  mark: { in: null, out: null }, // In and Out marks on the timeline (seconds; null = not set). Saved, not part of undo
   past: [],
   future: [],
   // Selected items: video clip ids, audio clip ids, or 'sa:<videoClipId>:<stream>' for one attached audio stream.
@@ -38,6 +40,8 @@ export const initialState = {
   playhead: 0,
   playing: false,
   seekId: 0,
+  playRate: 1, // J/K/L: speed and direction while playing (-8..8); 1 = normal
+  playUntil: null, // Play In to Out: the time where playback stops by itself
 }
 
 // Adds start/dur/ov to every clip. Clips are rippled (no gaps). A clip with `transition`
@@ -260,8 +264,10 @@ function cutRange(cur, t0, t1) {
   for (const c of layout(cur.clips)) {
     const orig = cur.clips.find((x) => x.id === c.id)
     const end = c.start + c.dur
+    // the empty time in front of the clip loses the part of it that is cut (or the gap would stay where the cut was)
+    const gapCut = c.gap > 0 ? Math.max(0, Math.min(c.start, t1) - Math.max(c.start - c.gap, t0)) : 0
     if (end <= t0 + 1e-6 || c.start >= t1 - 1e-6) {
-      clips.push(orig)
+      clips.push(gapCut > 1e-6 ? { ...orig, gap: Math.max(0, orig.gap - gapCut) } : orig)
       continue
     }
     const hasLeft = c.start < t0 - EPS
@@ -271,7 +277,7 @@ function cutRange(cur, t0, t1) {
     if (hasLeft) clips.push(noFade(c.reverse ? part(orig, a, orig.out) : part(orig, orig.in, a), hasRight ? 'fadeOut' : ''))
     if (hasRight) {
       const r = c.reverse ? part(orig, orig.in, b) : part(orig, b, orig.out)
-      const piece = { ...r, id: hasLeft ? uid() : orig.id, transition: hasLeft ? null : orig.transition, gap: hasLeft ? 0 : orig.gap }
+      const piece = { ...r, id: hasLeft ? uid() : orig.id, transition: hasLeft ? null : orig.transition, gap: hasLeft ? 0 : Math.max(0, (orig.gap || 0) - gapCut) }
       clips.push(hasLeft ? noFade(piece, 'fadeIn') : piece)
     }
   }
@@ -306,6 +312,170 @@ function cutRange(cur, t0, t1) {
   const audioClips = timed(cur.audioClips, audioLayout(cur.audioClips))
   const markers = cur.markers.filter((m) => m.t < t0 || m.t >= t1).map((m) => (m.t >= t1 ? { ...m, t: m.t - d } : m))
   return { clips, overlayClips, audioClips, markers, touched }
+}
+
+// Like cutRange, but nothing moves left: the time between t0 and t1 becomes empty (a gap on the main track)
+function liftRange(state, t0, t1) {
+  const d = t1 - t0
+  const before = layout(state.clips)
+  const cut = cutRange(state, t0, t1)
+  // overlay and audio clips at or after t0 go back to where they were (the right part of a cut clip starts at t1)
+  const back = (list) => list.map((c) => (c.start >= t0 - 1e-6 ? { ...c, start: c.start + d } : c))
+  // the first main clip after the cut waits for the empty time
+  let clips = cut.clips
+  const after = layout(clips)
+  const first = after.find((c) => c.start >= t0 - 1e-6)
+  if (first) {
+    const was = before.find((c) => c.id === first.id)
+    const want = was && was.start >= t1 - 1e-6 ? was.start : t1
+    clips = clips.map((c) => (c.id === first.id ? { ...c, gap: (c.gap || 0) + Math.max(0, want - first.start), transition: null } : c))
+  }
+  return { clips, overlayClips: back(cut.overlayClips), audioClips: back(cut.audioClips) }
+}
+
+// ---- The trim tools (like Premiere's) ----
+// ripple: trim an edge and move what comes after on that track along (the main track always does this)
+// roll:   move the cut between two clips that touch: one gets longer, the other shorter, nothing else moves
+// slip:   show a different part of the file in the same place on the timeline (in and out move together)
+// slide:  move a clip between its neighbours: the one before gets longer, the one after shorter (or the other way round)
+// Works from the state as it was when the drag began; d = how far the mouse moved, in timeline seconds (edge = 'in' or 'out'
+// for ripple and roll). Returns the changes for 'setRanges' ([{id, in?, out?, start?, slip?}]), or null where the tool
+// cannot be used (a reversed clip, no clip to roll with, nothing to slip in a picture or text).
+export function trimEdit(state, { mode, id, edge, d }) {
+  const main = layout(state.clips).map((c) => ({ ...c, where: 'main' }))
+  const ovl = overlayLayout(state.overlayClips).map((c) => ({ ...c, where: 'video' }))
+  const aud = audioLayout(state.audioClips).map((c) => ({ ...c, where: 'audio' }))
+  const all = [...main, ...ovl, ...aud]
+  const c = all.find((x) => x.id === id)
+  if (!c || c.reverse) return null
+  const mediaOf = (x) => state.media.find((m) => m.id === x.mediaId)
+  // the longest a clip's source can go (pictures and text have no end)
+  const endOf = (x) => {
+    const m = mediaOf(x)
+    return m && (m.type === 'video' || m.type === 'audio') ? m.duration : Infinity
+  }
+  const sp = (x) => (x.where === 'audio' ? 1 : speedOf(x))
+  const len = (x) => (x.out - x.in) / sp(x)
+  const cl = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
+  const E = 0.02
+  let prev = null
+  let next = null
+  let same = []
+  if (c.where === 'main') {
+    const i = main.findIndex((x) => x.id === id)
+    prev = i > 0 && !(c.gap > 0) ? main[i - 1] : null
+    next = main[i + 1] && !(main[i + 1].gap > 0) ? main[i + 1] : null
+  } else {
+    same = all.filter((x) => x.where === c.where && x.trackId === c.trackId && x.id !== c.id)
+    prev = same.find((x) => Math.abs(x.start + len(x) - c.start) < E) || null
+    next = same.find((x) => Math.abs(c.start + len(c) - x.start) < E) || null
+  }
+  const items = []
+  if (mode === 'roll') {
+    const A = edge === 'out' ? c : prev
+    const B = edge === 'out' ? next : c
+    if (!A || !B || A.reverse || B.reverse) return null
+    const lo = Math.max(-(len(A) - MIN_CLIP), -B.in / sp(B))
+    const hi = Math.min((endOf(A) - A.out) / sp(A), len(B) - MIN_CLIP)
+    const dd = cl(d, lo, hi)
+    items.push({ id: A.id, out: A.out + dd * sp(A) })
+    items.push({ id: B.id, in: B.in + dd * sp(B), ...(B.where === 'main' ? {} : { start: B.start + dd }) })
+  } else if (mode === 'ripple') {
+    if (edge === 'out') {
+      const dd = cl(d, -(len(c) - MIN_CLIP), (endOf(c) - c.out) / sp(c))
+      items.push({ id: c.id, out: c.out + dd * sp(c) })
+      if (c.where !== 'main') for (const x of same) if (x.start >= c.start + len(c) - E) items.push({ id: x.id, start: x.start + dd })
+    } else {
+      const dd = cl(d, -c.in / sp(c), len(c) - MIN_CLIP) // right = shorter: the clip keeps its start, what follows moves left
+      items.push({ id: c.id, in: c.in + dd * sp(c) })
+      if (c.where !== 'main') for (const x of same) if (x.start >= c.start + len(c) - E) items.push({ id: x.id, start: x.start - dd })
+    }
+  } else if (mode === 'slip') {
+    const m = mediaOf(c)
+    if (!m || (m.type !== 'video' && m.type !== 'audio')) return null
+    const span = c.out - c.in
+    const ni = cl(c.in - d * sp(c), 0, Math.max(0, endOf(c) - span)) // dragging right shows an earlier part, like pulling the film
+    items.push({ id: c.id, in: ni, out: ni + span, slip: true })
+  } else if (mode === 'slide') {
+    let lo = -Infinity
+    let hi = Infinity
+    if (c.where === 'main') {
+      if (!prev) return null
+      lo = Math.max(lo, -(len(prev) - MIN_CLIP))
+      hi = Math.min(hi, (endOf(prev) - prev.out) / sp(prev))
+      if (next) {
+        lo = Math.max(lo, -next.in / sp(next))
+        hi = Math.min(hi, len(next) - MIN_CLIP)
+      }
+    } else {
+      // clips that do not touch it are walls; touching ones give and take
+      for (const x of same) {
+        if (x === prev || x === next) continue
+        if (x.start + len(x) <= c.start + E) lo = Math.max(lo, x.start + len(x) - c.start)
+        if (x.start >= c.start + len(c) - E) hi = Math.min(hi, x.start - (c.start + len(c)))
+      }
+      lo = Math.max(lo, -c.start)
+      if (prev) {
+        lo = Math.max(lo, -(len(prev) - MIN_CLIP))
+        hi = Math.min(hi, (endOf(prev) - prev.out) / sp(prev))
+      }
+      if (next) {
+        lo = Math.max(lo, -next.in / sp(next))
+        hi = Math.min(hi, len(next) - MIN_CLIP)
+      }
+    }
+    const dd = cl(d, lo, hi)
+    if (prev) items.push({ id: prev.id, out: prev.out + dd * sp(prev) })
+    if (next) items.push({ id: next.id, in: next.in + dd * sp(next), ...(next.where === 'main' ? {} : { start: next.start + dd }) })
+    if (c.where !== 'main') items.push({ id: c.id, start: c.start + dd })
+  } else return null
+  // the sound of a video clip that was detached but still lines up with it goes along
+  const byId = new Map(items.map((i) => [i.id, i]))
+  const pick = (x) => {
+    const i = byId.get(x.id)
+    return i ? { ...x, in: i.in ?? x.in, out: i.out ?? x.out, start: i.start ?? x.start } : x
+  }
+  const newMain = layout(state.clips.map((x) => pick(x)))
+  for (const v of [...main, ...ovl]) {
+    const nv = v.where === 'main' ? { ...pick(v), start: newMain.find((x) => x.id === v.id).start } : pick(v)
+    if (nv.in === v.in && nv.out === v.out && Math.abs(nv.start - v.start) < 1e-6) continue
+    for (const a of aud) {
+      if (a.origin !== v.id || a.stream == null || byId.has(a.id)) continue
+      if (Math.abs(a.in - v.in) > 1e-3 || Math.abs(a.out - v.out) > 1e-3 || Math.abs(a.start - v.start) > 1e-3) continue
+      items.push({ id: a.id, in: nv.in, out: nv.out, start: nv.start, slip: byId.get(v.id) && byId.get(v.id).slip })
+    }
+  }
+  return items
+}
+// a clip's keyframes, warp keys and volume lines moved by s seconds of its source (a slip keeps them where they were on the timeline)
+function shiftKeys(c, s) {
+  if (!s) return c
+  const mv = (list) => (list || []).map((k) => ({ ...k, t: k.t + s }))
+  const n = { ...c }
+  if (c.anim) n.anim = Object.fromEntries(Object.entries(c.anim).map(([p, l]) => [p, mv(l)]))
+  if (c.warp && c.warp.keys) n.warp = { ...c.warp, keys: mv(c.warp.keys) }
+  if (c.env) n.env = mv(c.env)
+  if (c.av) n.av = Object.fromEntries(Object.entries(c.av).map(([k, v]) => [k, v && v.env ? { ...v, env: mv(v.env) } : v]))
+  return n
+}
+
+// The part of a file a new clip uses: the In and Out marked in the source viewer, or all of it
+export function sourceRange(m) {
+  const d = m.duration || 0
+  const mk = m.mark
+  if (!mk) return [0, d]
+  const a = Math.max(0, Math.min(d, mk.in || 0))
+  const b = Math.max(a, Math.min(d, mk.out == null ? d : mk.out))
+  return b - a > 0.04 ? [a, b] : [0, d]
+}
+// the marked range on the timeline [from, to], or null when nothing is marked (a missing side = start / end)
+export function markRange(state) {
+  const m = state.mark || {}
+  if (m.in == null && m.out == null) return null
+  const total = projectDuration(state)
+  const a = m.in == null ? 0 : m.in
+  const b = m.out == null ? total : Math.min(m.out, total)
+  return b > a ? [a, b] : null
 }
 
 // The words said on the main track (from Captions), at their place on the timeline, in order
@@ -385,6 +555,12 @@ function commit(state, patch) {
   return { ...state, ...patch, past: hist(state), future: [] }
 }
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v))
+// track heights on the timeline (px): video rows ('main', 'v:') and sound rows ('s:', 'a:')
+export const ROW_MIN = 28
+export const ROW_MAX = 260
+export const ROW_DEF = { video: 76, audio: 60 }
+export const rowKind = (key) => (key === 'main' || key.startsWith('v:') ? 'video' : 'audio')
+export const rowHeight = (state, key) => (state.rowH && state.rowH[key]) || ROW_DEF[rowKind(key)]
 
 // ---- image layers (see the image project actions in the reducer)
 const LAYER_LONG = 36000 // a layer lasts "forever": an image has no timeline
@@ -675,6 +851,8 @@ export function reducer(state, a) {
         markers: a.markers || [],
         lockedRows: a.lockedRows || [],
         hiddenRows: a.hiddenRows || [],
+        rowH: a.rowH || {},
+        mark: a.mark || { in: null, out: null },
       }
 
     case 'updateMedia':
@@ -683,7 +861,8 @@ export function reducer(state, a) {
     case 'addClip': {
       const m = state.media.find((x) => x.id === a.mediaId)
       if (!m || m.type === 'audio') return state
-      const clip = { id: uid(), mediaId: m.id, in: 0, out: m.duration, transition: null, noAudio: [] }
+      const [mi, mo] = sourceRange(m)
+      const clip = { id: uid(), mediaId: m.id, in: mi, out: mo, transition: null, noAudio: [] }
       const clips = [...state.clips]
       const idx = a.index == null ? clips.length : clamp(a.index, 0, clips.length)
       clips.splice(idx, 0, clip)
@@ -1205,7 +1384,8 @@ export function reducer(state, a) {
         }
       }
       const gid = m.type === 'video' && (m.audioStreams || []).length ? uid() : undefined
-      const clip = { id: uid(), mediaId: m.id, trackId, in: 0, out: m.duration || 3, start: Math.max(0, a.start || 0), groupId: gid }
+      const [mi, mo] = m.type === 'video' ? sourceRange(m) : [0, m.duration || 3]
+      const clip = { id: uid(), mediaId: m.id, trackId, in: mi, out: mo, start: Math.max(0, a.start || 0), groupId: gid }
       if (m.type === 'image') clip.out = 3
       // the video's own sound goes to detached audio clips grouped with it
       const tracks = [...state.audioTracks]
@@ -1214,7 +1394,7 @@ export function reducer(state, a) {
         for (let n = 0; n < m.audioStreams.length; n++) {
           const tid = 'ug' + n
           if (!tracks.some((t) => t.id === tid)) tracks.push({ id: tid, name: `Video audio ${n + 1} (detached)`, kind: 'free', volume: 1, mute: false })
-          added.push({ id: uid(), mediaId: m.id, stream: n, trackId: tid, in: 0, out: clip.out, start: clip.start, origin: clip.id, groupId: gid })
+          added.push({ id: uid(), mediaId: m.id, stream: n, trackId: tid, in: clip.in, out: clip.out, start: clip.start, origin: clip.id, groupId: gid })
         }
       }
       return {
@@ -1432,7 +1612,10 @@ export function reducer(state, a) {
       const f = (c) => {
         if (c.id !== a.id) return c
         const fx = { ...(c.fx || {}) }
-        for (const [k, v] of Object.entries(a.patch)) fx[k] = k === 'key' || k === 'cc' ? { ...(fx[k] || {}), ...v } : v
+        for (const [k, v] of Object.entries(a.patch)) {
+          if (v == null) delete fx[k] // e.g. lut: null = no LUT
+          else fx[k] = k === 'key' || k === 'cc' || k === 'lut' ? { ...(fx[k] || {}), ...v } : v
+        }
         return { ...c, fx }
       }
       return a.live ? { ...state, ...mapClips(state, f) } : commit(state, mapClips(state, f))
@@ -1442,7 +1625,9 @@ export function reducer(state, a) {
         if (c.id !== a.id || !c.fx) return c
         if (a.only === 'cc') return { ...c, fx: { ...c.fx, cc: undefined } }
         const { fx, ...rest } = c
-        return a.only === 'effects' && fx.cc ? { ...rest, fx: { cc: fx.cc } } : rest
+        if (a.only === 'lut') return { ...c, fx: { ...c.fx, lut: undefined } }
+        const keep = a.only === 'effects' ? Object.fromEntries(Object.entries({ cc: fx.cc, lut: fx.lut }).filter(([, v]) => v)) : {}
+        return Object.keys(keep).length ? { ...rest, fx: keep } : rest
       }
       return commit(state, mapClips(state, f))
     }
@@ -1450,6 +1635,51 @@ export function reducer(state, a) {
     case 'setSpeed': {
       const sp = clamp(+a.speed || 1, 0.1, 8)
       const f = (c) => (c.id === a.id ? { ...c, speed: sp === 1 ? undefined : sp } : c)
+      return a.live ? { ...state, ...mapClips(state, f) } : commit(state, mapClips(state, f))
+    }
+    // ---- nesting (see nest.js). nestApply: the planned clips are taken out (their place stays) and one clip of the rendered
+    // nest goes where they were: on the main track if any of them was there, otherwise on the first one's video track.
+    case 'nestApply': {
+      const { plan, media } = a
+      let st = reducer({ ...state, selection: plan.ids }, { type: 'deleteSelection', keepGap: true })
+      st = { ...st, media: [...st.media.filter((m) => m.id !== media.id), media] }
+      const len = Math.min(media.duration, plan.t1 - plan.t0)
+      const clip = { id: uid(), mediaId: media.id, in: 0, out: len, transition: null, noAudio: [] }
+      let placed = false
+      if (plan.hasMain) {
+        const slot = mainSlot(st, plan.t0, len - 0.002)
+        if (slot) {
+          st = { ...st, clips: placeMain(st, slot, [clip]) }
+          placed = true
+        }
+      }
+      if (!placed) st = reducer(st, { type: 'addOverlayClip', mediaId: media.id, trackId: plan.track || undefined, start: plan.t0 })
+      const made = placed ? clip.id : st.overlayClips[st.overlayClips.length - 1].id
+      return { ...st, past: hist(state), future: [], selection: [made] }
+    }
+    // nestReplace: the nest was changed inside: its media (id = the old one) becomes the new file; its clips follow
+    // (a clip now longer than the nest is shortened)
+    case 'nestReplace': {
+      const m = a.media
+      const fix = (c) => (c.mediaId !== a.id ? c : { ...c, mediaId: m.id, in: Math.min(c.in, Math.max(0, m.duration - MIN_CLIP)), out: Math.min(c.out, m.duration) })
+      return { ...state, media: state.media.map((x) => (x.id === a.id ? m : x)), clips: state.clips.map(fix), overlayClips: state.overlayClips.map(fix), audioClips: state.audioClips.map(fix) }
+    }
+    // the trim tools: set in / out / start of clips on any track (from trimEdit); live while dragging, 'checkpoint' first
+    case 'setRanges': {
+      const byId = new Map(a.items.map((i) => [i.id, i]))
+      const put = (c) => {
+        const i = byId.get(c.id)
+        if (!i) return c
+        let n = i.slip ? shiftKeys(c, (i.in ?? c.in) - c.in) : { ...c }
+        for (const k of ['in', 'out', 'start']) if (i[k] != null) n[k] = i[k]
+        return n
+      }
+      const patch = { clips: state.clips.map(put), overlayClips: state.overlayClips.map(put), audioClips: state.audioClips.map(put) }
+      return a.commit ? commit(state, patch) : { ...state, ...patch }
+    }
+    // Stabilise: stab = {strength 0..100} or null (off). A reversed clip cannot be stabilised (the reversed copy wins).
+    case 'setStab': {
+      const f = (c) => (c.id === a.id ? { ...c, stab: a.stab ? { strength: clamp(Math.round(a.stab.strength ?? 50), 0, 100) } : undefined } : c)
       return a.live ? { ...state, ...mapClips(state, f) } : commit(state, mapClips(state, f))
     }
     case 'setReverse': {
@@ -1553,7 +1783,7 @@ export function reducer(state, a) {
       let tracks = state.audioTracks
       let trackId = a.trackId
       const want = Math.max(0, a.start || 0)
-      const len = m.duration || 0
+      const len = sourceRange(m)[1] - sourceRange(m)[0]
       const on = (tid) => state.audioClips.filter((x) => x.trackId === tid)
       let start = want
       if (trackId) {
@@ -1568,7 +1798,8 @@ export function reducer(state, a) {
           tracks = [...tracks, { id: trackId, name: nextAudioName(tracks), kind: 'free', volume: 1, mute: false }]
         }
       }
-      const clip = { id: uid(), mediaId: m.id, trackId, in: 0, out: m.duration, start }
+      const [mi, mo] = sourceRange(m)
+      const clip = { id: uid(), mediaId: m.id, trackId, in: mi, out: mo, start }
       return { ...commit(state, { audioClips: [...state.audioClips, clip] }), audioTracks: tracks, selection: [clip.id] }
     }
 
@@ -1608,6 +1839,21 @@ export function reducer(state, a) {
     // live drag (call 'checkpoint' first)
     case 'moveMarker':
       return { ...state, markers: state.markers.map((m) => (m.id === a.id ? { ...m, t: Math.max(0, a.t) } : m)).sort((x, y) => x.t - y.t) }
+    // track heights (a view setting: saved with the project, not part of undo). keys = row keys; h = px, or null = the default
+    case 'setRowHeight': {
+      const rowH = { ...(state.rowH || {}) }
+      for (const k of a.keys) {
+        if (a.h == null) delete rowH[k]
+        else rowH[k] = Math.round(Math.min(ROW_MAX, Math.max(ROW_MIN, +a.h || 0)))
+      }
+      return { ...state, rowH }
+    }
+    case 'growRows': {
+      const keys = rowKeys(state).filter((k) => rowKind(k) === a.kind)
+      const rowH = { ...(state.rowH || {}) }
+      for (const k of keys) rowH[k] = Math.round(Math.min(ROW_MAX, Math.max(ROW_MIN, rowHeight(state, k) + a.by)))
+      return { ...state, rowH }
+    }
     case 'toggleRowLock': {
       const on = state.lockedRows.includes(a.key)
       return { ...state, lockedRows: on ? state.lockedRows.filter((k) => k !== a.key) : [...state.lockedRows, a.key] }
@@ -1653,7 +1899,36 @@ export function reducer(state, a) {
       }
 
     case 'setPlaying':
-      return { ...state, playing: a.value }
+      return { ...state, playing: a.value, playRate: a.value ? a.rate || 1 : 1, playUntil: a.value && a.until != null ? a.until : null }
+    // J (dir -1), K (0), L (1): press again to go faster (2x, 4x, 8x); the other way starts at normal speed
+    case 'shuttle': {
+      if (!a.dir) return { ...state, playing: false, playRate: 1, playUntil: null }
+      const r = state.playing ? state.playRate || 1 : 0
+      const rate = r * a.dir > 0 ? Math.max(-8, Math.min(8, r * 2)) : a.dir
+      return { ...state, playing: true, playRate: rate, playUntil: null }
+    }
+
+    // ---- In and Out marks (timeline seconds). A mark set on the wrong side of the other one removes the other.
+    case 'setMark': {
+      const m = { in: null, out: null, ...state.mark }
+      const t = a.t == null ? null : Math.max(0, a.t)
+      m[a.which] = t
+      if (t != null && m.in != null && m.out != null && m.out - m.in < 0.04) m[a.which === 'in' ? 'out' : 'in'] = null
+      return { ...state, mark: m }
+    }
+    case 'clearMarks':
+      return { ...state, mark: { in: null, out: null } }
+    // Lift: take out what is between the marks on every unlocked track and leave the space empty
+    case 'lift': {
+      if ((state.lockedRows || []).includes('main')) return state
+      const t0 = Math.max(0, a.t0)
+      const t1 = a.t1
+      if (!(t1 - t0 > 0.01)) return state
+      return commit(state, liftRange(state, t0, t1))
+    }
+    // the part of a file that is used when it is added to the timeline (the source viewer's In and Out)
+    case 'setSourceMark':
+      return { ...state, media: state.media.map((m) => (m.id === a.id ? { ...m, mark: a.mark && (a.mark.in > 0.001 || a.mark.out < m.duration - 0.001) ? a.mark : undefined } : m)) }
 
     // ===== image projects (the image editor) =====
     // A layer is an overlay clip on a track of its own that is shown from second 0 for a very long time. The layer
@@ -1872,13 +2147,44 @@ export function fmtDur(t) {
 // Only the part a..b (seconds on the timeline) of a project, starting at 0: everything before and after it is cut away
 // on every track, the same way Edit by text cuts (used to export a part of the video)
 export function sectionOf(state, a, b) {
+  return piecesOf(state, [[a, b]])
+}
+
+// Only the given pieces ([[a, b], ...] in timeline seconds) of a project, joined one after the other from 0:
+// everything between, before and after them is cut away on every track (used to export the selected clips)
+export function piecesOf(state, pieces) {
   const total = projectDuration(state)
+  const keep = mergeSpans(pieces.map(([a, b]) => [Math.max(0, a), Math.min(total, b)]).filter(([a, b]) => b - a > 0.001))
+  if (!keep.length) return state
   const ranges = []
-  if (b < total - 0.001) ranges.push([b, total + 1])
-  if (a > 0.001) ranges.push([0, a])
+  let at = 0
+  for (const [a, b] of keep) {
+    if (a - at > 0.001) ranges.push([at, a])
+    at = b
+  }
+  if (total - at > 0.001) ranges.push([at, total + 1])
   if (!ranges.length) return state
   const cut = reducer({ ...state, lockedRows: [] }, { type: 'rippleDelete', ranges })
   return { ...cut, lockedRows: state.lockedRows, selection: [], playhead: 0 }
+}
+
+// time spans sorted, with the ones that overlap or (nearly) touch joined
+function mergeSpans(list) {
+  const out = []
+  for (const r of [...list].sort((p, q) => p[0] - q[0])) {
+    const last = out[out.length - 1]
+    if (last && r[0] - last[1] < 0.05) last[1] = Math.max(last[1], r[1])
+    else out.push([r[0], r[1]])
+  }
+  return out
+}
+
+// The times on the timeline that the given clips cover (video, overlay, text or audio clips, or 'sa:<clip>:<n>' =
+// the sound of a video clip), joined where they overlap or touch. [] when none of them is found.
+export function clipPieces(state, ids) {
+  const want = new Set(ids.map((id) => (String(id).startsWith('sa:') ? String(id).split(':')[1] : id)))
+  const items = [...layout(state.clips), ...overlayLayout(state.overlayClips), ...audioLayout(state.audioClips)].filter((c) => want.has(c.id))
+  return mergeSpans(items.map((c) => [c.start, c.start + c.dur]))
 }
 
 export function fmtTime(t) {

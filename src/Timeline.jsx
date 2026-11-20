@@ -5,13 +5,12 @@ import Wave from './Wave.jsx'
 import VolumeEdit from './VolumeEdit.jsx'
 import MiniMap from './MiniMap.jsx'
 import { maskSpan } from './masks.js'
-import { srcAt, tlOf, speedOf, lenOf, layout, audioLayout, overlayLayout, streamCount, projectDuration, rowKeys, audioSource, fmtTime, fmtDur, toUrl, uid, hasAttached, canGroup, canUngroup, hasClipboard, streamAudioOf, envAt, fadeAt } from './state.js'
+import { srcAt, tlOf, speedOf, lenOf, layout, audioLayout, overlayLayout, streamCount, projectDuration, rowKeys, audioSource, fmtTime, fmtDur, toUrl, uid, hasAttached, canGroup, canUngroup, hasClipboard, streamAudioOf, envAt, fadeAt, rowHeight, rowKind, ROW_MIN, ROW_MAX, markRange, trimEdit } from './state.js'
 import { labelColor } from './labels.js'
 
 const TRACK_PAD = 12
 const LABEL = 196
-const H_VIDEO = 76
-const H_AUDIO = 60
+const SHORT = 46 // tracks lower than this hide the small print (clip length, mask bar)
 
 // a stable colour per group, shown as a stripe on every member
 const groupColor = (g) => {
@@ -22,14 +21,14 @@ const groupColor = (g) => {
 
 // The left part of a row: a grip to drag the row up or down, the name (double-click to rename) and,
 // for audio rows, mute. (The volume belongs to each audio clip: select it and use the inspector.)
-function RowLabel({ name, sub, mute, onMute, onRemove, onRename, onGrip, locked, hidden, onLock, onHide }) {
+function RowLabel({ name, sub, mute, onMute, onRemove, onRename, onGrip, locked, hidden, onLock, onHide, rowKey, onResize, onResetH }) {
   const [edit, setEdit] = useState(false)
   const done = (v) => {
     setEdit(false)
     if (v && v.trim() && v.trim() !== name) onRename(v.trim())
   }
   return (
-    <div className="tl-label" style={{ width: LABEL }} onPointerDown={onGrip} title="Drag up or down to move this track">
+    <div className="tl-label" data-row={rowKey} style={{ width: LABEL }} onPointerDown={onGrip} title="Drag up or down to move this track">
       <div className="tl-label-top">
         <span className="grip"><Icon name="grip" size={12} /></span>
         {edit ? (
@@ -67,10 +66,11 @@ function RowLabel({ name, sub, mute, onMute, onRemove, onRename, onGrip, locked,
         )}
       </div>
       {sub && <div className="tl-sub" title={sub}>{sub}</div>}
+      {onResize && <div className="row-resize" onPointerDown={onResize} onDoubleClick={onResetH} title="Drag to make this track taller or shorter (hold Shift for all video or all sound tracks). Double-click: normal height." />}
     </div>
   )
 }
-export default function Timeline({ onCaptions, height, state, dispatch, zoom, setZoom, splitKey, freezeKey, groupKey, ungroupKey, onFreeze, onKeybinds, snapOn, setSnapOn, rippleOn, setRippleOn, onCopy, fitRef, miniOn, setMiniOn, rec, onRecord }) {
+export default function Timeline({ onCaptions, height, state, dispatch, zoom, setZoom, splitKey, freezeKey, groupKey, ungroupKey, onFreeze, onKeybinds, snapOn, setSnapOn, rippleOn, setRippleOn, onCopy, fitRef, miniOn, setMiniOn, rec, onRecord, onExportSel, exportSelKey, heightKeys = [], onLift, onExtract, liftKeys = [], onNest, nestKey, onOpenNest, tool = 'select', setTool = () => {}, toolKeys = {} }) {
   const scrollRef = useRef(null)
   const innerRef = useRef(null)
   const trackRef = useRef(null) // the ruler lane: reference for time <-> pixel conversion
@@ -82,6 +82,9 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
   const [showAdd, setShowAdd] = useState(false) // the 'Add track' popup
   const [snapLine, setSnapLine] = useState(null) // time (s) of the snap guide while dragging
   const [editMarker, setEditMarker] = useState(null) // id of the marker whose name is being typed
+  const [resize, setResize] = useState(null) // {keys, h}: tracks being made taller or shorter (saved when the mouse is let go)
+  const [heightOpen, setHeightOpen] = useState(false) // the Track height popup
+  const heightBtn = useRef(null)
   const rowEls = useRef({})
   // the part of the timeline that is on screen (in lane pixels), so waveforms are only drawn there, sharp
   const [view, setView] = useState({ l: 0, r: 3000 })
@@ -117,6 +120,66 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
   const width = LABEL + TRACK_PAD * 2 + Math.max(total + 15, 40) * zoom
   const mediaOf = (c) => state.media.find((m) => m.id === c.mediaId)
   const sel = new Set(state.selection)
+
+  // ---- track heights: drag the bottom edge of a track's name, Alt + wheel over it (Shift + wheel: all of that kind),
+  // the Track height popup, or the keyboard (see keybinds.js)
+  const hOf = (key) => (resize && resize.keys.includes(key) ? resize.h : rowHeight(state, key))
+  const waveH = (key) => hOf(key) - (hOf(key) < SHORT ? 8 : 12)
+  const kindKeys = (kind) => keys.filter((k) => rowKind(k) === kind)
+  const startResize = (e, key) => {
+    if (e.button !== 0) return
+    e.preventDefault()
+    e.stopPropagation()
+    const targets = e.shiftKey ? kindKeys(rowKind(key)) : [key]
+    const y0 = e.clientY
+    const h0 = rowHeight(state, key)
+    let h = h0
+    const move = (ev) => {
+      h = Math.round(Math.min(ROW_MAX, Math.max(ROW_MIN, h0 + ev.clientY - y0)))
+      setResize({ keys: targets, h })
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+      window.removeEventListener('pointercancel', up)
+      if (h !== h0) dispatch({ type: 'setRowHeight', keys: targets, h })
+      setResize(null)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    window.addEventListener('pointercancel', up)
+  }
+  const resetHeight = (e, key) => {
+    e.stopPropagation()
+    dispatch({ type: 'setRowHeight', keys: e.shiftKey ? kindKeys(rowKind(key)) : [key], h: null })
+  }
+  const wheelRef = useRef(null)
+  wheelRef.current = (e) => {
+    if (!(e.altKey || e.shiftKey) || e.ctrlKey) return
+    const lab = e.target.closest && e.target.closest('.tl-label[data-row]')
+    if (!lab) return
+    const d = e.deltaY || e.deltaX // Shift turns the wheel sideways in Chromium
+    if (!d) return
+    e.preventDefault()
+    const key = lab.dataset.row
+    dispatch({ type: 'setRowHeight', keys: e.shiftKey ? kindKeys(rowKind(key)) : [key], h: rowHeight(state, key) + (d < 0 ? 8 : -8) })
+  }
+  useEffect(() => {
+    const el = scrollRef.current
+    const on = (e) => wheelRef.current(e)
+    el.addEventListener('wheel', on, { passive: false })
+    return () => el.removeEventListener('wheel', on)
+  }, [])
+  useEffect(() => {
+    if (!heightOpen) return
+    const close = (e) => !e.target.closest('.th-wrap') && setHeightOpen(false)
+    window.addEventListener('pointerdown', close)
+    return () => window.removeEventListener('pointerdown', close)
+  }, [heightOpen])
+  const firstH = (kind) => {
+    const k = kindKeys(kind)[0]
+    return k ? hOf(k) : rowHeight(state, kind === 'video' ? 'main' : 's:0')
+  }
 
   // Keep the playhead in view: page the timeline when it nears the right edge (or leaves the left).
   useEffect(() => {
@@ -195,6 +258,26 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       skipMarker.current = null
+      setSnapLine(null)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+  }
+  // drag an In or Out mark along the ruler (it snaps like clips do); right-click removes it
+  const startMarkDrag = (e, which) => {
+    if (e.button !== 0) return
+    e.stopPropagation()
+    e.preventDefault()
+    const t0 = state.mark[which]
+    const x0 = e.clientX
+    const move = (ev) => {
+      let t = Math.max(0, t0 + (ev.clientX - x0) / zoom)
+      t = Math.max(0, t + snapShift([t], new Set()))
+      dispatch({ type: 'setMark', which, t })
+    }
+    const up = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
       setSnapLine(null)
     }
     window.addEventListener('pointermove', move)
@@ -307,9 +390,51 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
     })
   }
 
+  // ---- the trim tools (ripple, roll, slip, slide): one drag, the maths is trimEdit in state.js. The preview follows:
+  // roll shows the new cut, slip the clip's first frame, slide where the clip now starts.
+  const [toolTip, setToolTip] = useState(null) // {x, y, text} while a tool drag is on
+  const startTool = (e, c, mode, edge, row) => {
+    if (e.button !== 0) return false
+    if (c.reverse) return false
+    e.stopPropagation()
+    e.preventDefault()
+    dispatch({ type: 'select', id: c.id })
+    if (locked(row)) return true
+    const base = state
+    const x0 = e.clientX
+    let started = false
+    const names = { ripple: 'Ripple', roll: 'Roll', slip: 'Slip', slide: 'Slide' }
+    trackPointer(e, {
+      onMove: (x, y) => {
+        if (!started && Math.abs(x - x0) < 3) return
+        if (!started) {
+          started = true
+          dispatch({ type: 'checkpoint' })
+        }
+        const d = (x - x0) / zoom
+        const items = trimEdit(base, { mode, id: c.id, edge, d })
+        if (!items) return
+        dispatch({ type: 'setRanges', items })
+        const me = items.find((i) => i.id === c.id)
+        let text = names[mode]
+        if (mode === 'slip' && me) text += `: uses ${fmtTime(me.in).slice(0, 8)} to ${fmtTime(me.out).slice(0, 8)} of the file`
+        else if (mode === 'roll') {
+          const cut = edge === 'out' ? c.start + c.dur + d : c.start + d
+          text += ': the cut moves to ' + fmtTime(Math.max(0, cut)).slice(0, 8)
+          dispatch({ type: 'setPlayhead', t: Math.max(0, cut), user: true })
+        } else text += (d >= 0 ? ' +' : ' ') + d.toFixed(2) + ' s'
+        if (mode === 'slip') dispatch({ type: 'setPlayhead', t: c.start, user: true })
+        setToolTip({ x, y, text })
+      },
+      onEnd: () => setToolTip(null),
+    })
+    return true
+  }
+  const toolOn = (mode) => tool === mode
   // ---- drag a video clip body to reorder (the whole selection / group moves together)
   const startMove = (e, c) => {
     if (e.button !== 0) return
+    if ((toolOn('slip') || toolOn('slide')) && startTool(e, c, tool, null, 'main')) return
     if (locked('main')) return void dispatch({ type: 'select', id: c.id })
     const mod = e.ctrlKey || e.shiftKey
     const wasSelected = sel.has(c.id)
@@ -459,6 +584,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
 
   // ---- drag the left/right edge of a video clip to trim
   const startTrim = (e, c, side) => {
+    if (toolOn('roll') && startTool(e, c, 'roll', side, 'main')) return
     e.stopPropagation()
     e.preventDefault()
     dispatch({ type: 'select', id: c.id })
@@ -496,6 +622,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
   // ---- audio clips: drag to move (all selected audio clips move together), drag edges to trim
   const startMoveAudio = (e, a) => {
     if (e.button !== 0) return
+    if ((toolOn('slip') || toolOn('slide')) && startTool(e, a, tool, null, 'a:' + a.trackId)) return
     const mod = e.ctrlKey || e.shiftKey
     const wasSelected = sel.has(a.id)
     let ids = state.selection
@@ -536,6 +663,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
     window.addEventListener('pointerup', up)
   }
   const startTrimAudio = (e, a, side) => {
+    if ((toolOn('roll') || toolOn('ripple')) && startTool(e, a, tool, side, 'a:' + a.trackId)) return
     e.stopPropagation()
     e.preventDefault()
     dispatch({ type: 'select', id: a.id })
@@ -560,6 +688,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
   // ---- overlay clips: drag to move in time (or onto another video track), drag edges to trim
   const startMoveOverlay = (e, c) => {
     if (e.button !== 0) return
+    if ((toolOn('slip') || toolOn('slide')) && startTool(e, c, tool, null, 'v:' + c.trackId)) return
     const mod = e.ctrlKey || e.shiftKey
     const wasSelected = sel.has(c.id)
     const groupIds = (g) => (g ? [...oclips, ...aclips].filter((x) => x.groupId === g).map((x) => x.id) : [])
@@ -620,6 +749,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
     window.addEventListener('pointerup', up)
   }
   const startTrimOverlay = (e, c, side) => {
+    if ((toolOn('roll') || toolOn('ripple')) && startTool(e, c, tool, side, 'v:' + c.trackId)) return
     e.stopPropagation()
     e.preventDefault()
     dispatch({ type: 'select', id: c.id })
@@ -726,6 +856,8 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
   }
 
   const groupOk = canGroup(state)
+  const ioRange = markRange(state)
+  const ioBoth = state.mark.in != null && state.mark.out != null
   const ungroupOk = canUngroup(state)
 
   const streamName = (n) => `Video audio ${n + 1}`
@@ -741,7 +873,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
 
   // ---- the rows (tracks), in the order the user arranged them
   const rowClass = (key) => {
-    const flags = (locked(key) ? ' locked' : '') + (hiddenRow(key) ? ' hidden' : '')
+    const flags = (locked(key) ? ' locked' : '') + (hiddenRow(key) ? ' hidden' : '') + (hOf(key) < SHORT ? ' short' : '') + (resize && resize.keys.includes(key) ? ' resizing' : '')
     if (!rowDrag) return flags
     if (rowDrag.key === key) return flags + ' row-dragging'
     const others = keys.filter((k) => k !== rowDrag.key)
@@ -751,14 +883,14 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
     return flags
   }
   // the props every row label needs for locking and hiding
-  const rowFlags = (key) => ({ locked: locked(key), hidden: hiddenRow(key), onLock: () => dispatch({ type: 'toggleRowLock', key }), onHide: () => dispatch({ type: 'toggleRowHide', key }) })
+  const rowFlags = (key) => ({ locked: locked(key), hidden: hiddenRow(key), onLock: () => dispatch({ type: 'toggleRowLock', key }), onHide: () => dispatch({ type: 'toggleRowHide', key }), rowKey: key, onResize: (e) => startResize(e, key), onResetH: (e) => resetHeight(e, key) })
   const rowRef = (key) => (el) => {
     if (el) rowEls.current[key] = el
     else delete rowEls.current[key]
   }
 
   const renderMain = (key) => (
-    <div className={'tl-row' + rowClass(key) + (dropRow === key ? ' drop-here' : '')} key={key} ref={rowRef(key)} style={{ height: H_VIDEO }}>
+    <div className={'tl-row' + rowClass(key) + (dropRow === key ? ' drop-here' : '')} key={key} ref={rowRef(key)} style={{ height: hOf(key) }}>
       <RowLabel name={state.mainName} onRename={(name) => dispatch({ type: 'renameRow', key, name })} onGrip={(e) => startRowDrag(e, key)} {...rowFlags(key)} />
       <div className="lane" onDragOver={onVideoDragOver} onDragLeave={() => setDropIdx(null)} onDrop={onVideoDrop}>
         <div className="lane-inner" style={{ left: TRACK_PAD }}>
@@ -800,6 +932,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
                   '--lbl': labelColor(c),
                 }}
                 onPointerDown={(e) => startMove(e, c)}
+                onDoubleClick={() => m.nest && onOpenNest && onOpenNest(m.id)}
               >
                 {c.ov > 0 && (
                   <div className="tr-zone" style={{ width: c.ov * zoom }} title={c.transition.name}>
@@ -813,7 +946,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
                   ))}
                 {maskBar(c)}
                 <div className="handle left" onPointerDown={(e) => startTrim(e, c, 'in')} />
-                <span className="clip-name">{c.groupId && <Icon name="link" size={11} />}{m.name}</span>
+                <span className="clip-name">{c.groupId && <Icon name="link" size={11} />}{m.nest && <Icon name="nest" size={11} />}{m.name}</span>
                 <span className="clip-dur">{fmtDur(c.dur)}{silenced ? ' · no audio' : ''}</span>
                 <div className="handle right" onPointerDown={(e) => startTrim(e, c, 'out')} />
               </div>
@@ -830,7 +963,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
     const tr = state.videoTracks.find((x) => x.id === key.slice(2))
     if (!tr) return null
     return (
-      <div className={'tl-row' + rowClass(key) + (dropRow === key ? ' drop-here' : '')} key={key} ref={rowRef(key)} style={{ height: H_VIDEO }}>
+      <div className={'tl-row' + rowClass(key) + (dropRow === key ? ' drop-here' : '')} key={key} ref={rowRef(key)} style={{ height: hOf(key) }}>
         <RowLabel
           name={tr.name}
           onRename={(name) => dispatch({ type: 'renameRow', key, name })}
@@ -858,6 +991,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
                   '--lbl': labelColor(c),
                     }}
                     onPointerDown={(e) => startMoveOverlay(e, c)}
+                    onDoubleClick={() => m.nest && onOpenNest && onOpenNest(m.id)}
                   >
                     {keyTimes(c)
                       .filter((t) => t >= c.in - 0.001 && t <= c.out + 0.001)
@@ -883,7 +1017,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
     const n = +key.slice(2)
     const st = { volume: 1, mute: false, ...state.streamSettings[n] }
     return (
-      <div className={'tl-row' + rowClass(key)} key={key} ref={rowRef(key)} style={{ height: H_AUDIO }}>
+      <div className={'tl-row' + rowClass(key)} key={key} ref={rowRef(key)} style={{ height: hOf(key) }}>
         <RowLabel
           name={st.name || streamName(n)}
           mute={st.mute}
@@ -911,11 +1045,11 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
                   style={{ left: c.start * zoom, width: Math.max(2, c.dur * zoom) }}
                   onPointerDown={(e) => clickStream(e, c, n)}
                 >
-                  <Wave file={(m.audioFiles || [])[n]} from={c.in} to={c.out} width={c.dur * zoom} left={c.start * zoom} view={view} height={H_AUDIO - 12} gain={(st.volume ?? 1) * own.volume} gainFn={gainFn} shapeKey={JSON.stringify([own.env, own.fadeIn, own.fadeOut])} />
+                  <Wave file={(m.audioFiles || [])[n]} from={c.in} to={c.out} width={c.dur * zoom} left={c.start * zoom} view={view} height={waveH(key)} gain={(st.volume ?? 1) * own.volume} gainFn={gainFn} shapeKey={JSON.stringify([own.env, own.fadeIn, own.fadeOut])} />
                   {sel.has(sid) && (
                     <VolumeEdit
                       width={c.dur * zoom - 2}
-                      height={H_AUDIO - 12}
+                      height={waveH(key)}
                       dur={c.dur}
                       env={own.env || []}
                       fadeIn={own.fadeIn}
@@ -940,7 +1074,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
     const t = state.audioTracks.find((x) => x.id === key.slice(2))
     if (!t) return null
     return (
-      <div className={'tl-row' + rowClass(key)} key={key} ref={rowRef(key)} style={{ height: H_AUDIO }}>
+      <div className={'tl-row' + rowClass(key)} key={key} ref={rowRef(key)} style={{ height: hOf(key) }}>
         <RowLabel
           name={t.name}
           mute={t.mute}
@@ -966,11 +1100,11 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
                     onPointerDown={(e) => startMoveAudio(e, a)}
                     title={clipAudioName(a)}
                   >
-                    <Wave file={audioSource(a, am)} from={a.in} to={a.out} width={Math.max(6, a.dur * zoom)} left={a.start * zoom} view={view} height={H_AUDIO - 12} gain={(t.volume ?? 1) * (a.volume ?? 1)} gainFn={gainFn} shapeKey={JSON.stringify([a.env, a.fadeIn, a.fadeOut])} />
+                    <Wave file={audioSource(a, am)} from={a.in} to={a.out} width={Math.max(6, a.dur * zoom)} left={a.start * zoom} view={view} height={waveH(key)} gain={(t.volume ?? 1) * (a.volume ?? 1)} gainFn={gainFn} shapeKey={JSON.stringify([a.env, a.fadeIn, a.fadeOut])} />
                     {sel.has(a.id) && (
                       <VolumeEdit
                         width={Math.max(6, a.dur * zoom) - 2}
-                        height={H_AUDIO - 12}
+                        height={waveH(key)}
                         dur={a.dur}
                         env={a.env || []}
                         fadeIn={a.fadeIn || 0}
@@ -1001,8 +1135,20 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
   }
 
   return (
-    <div className="timeline" style={height ? { height } : undefined}>
+    <div className={'timeline tool-' + tool} style={height ? { height } : undefined}>
+      {toolTip && <div className="tool-tip" style={{ left: toolTip.x + 14, top: toolTip.y - 34 }}>{toolTip.text}</div>}
       <div className="tl-toolbar">
+        <span className="tb-group tool-group">
+          {[
+            ['select', 'toolSelect', 'Select and move: drag clips, drag their edges to trim'],
+            ['ripple', 'toolRipple', 'Ripple trim: drag an edge, and what comes after on that track moves along (the main track always does this)'],
+            ['roll', 'toolRoll', 'Roll: drag the edge between two clips that touch; one gets longer and the other shorter, nothing else moves'],
+            ['slip', 'toolSlip', 'Slip: drag a clip to show another part of its file in the same place (its length and position stay)'],
+            ['slide', 'toolSlide', 'Slide: drag a clip between its neighbours; the one before gets longer and the one after shorter'],
+          ].map(([id, key, tip]) => (
+            <button key={id} className={tool === id ? 'on' : ''} onClick={() => setTool(id)} title={tip + (toolKeys[key] ? ' (' + toolKeys[key] + ')' : '')}><Icon name={key} size={14} /></button>
+          ))}
+        </span>
         <span className="tb-group">
           <button disabled={!state.past.length} onClick={() => dispatch({ type: 'undo' })} title="Undo (Ctrl+Z)"><Icon name="undo" /></button>
           <button disabled={!state.future.length} onClick={() => dispatch({ type: 'redo' })} title="Redo (Ctrl+Y)"><Icon name="redo" /></button>
@@ -1011,14 +1157,18 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
           <button onClick={() => dispatch({ type: 'split', t: state.playhead })} title={'Split at the playhead' + (splitKey ? ' (' + splitKey + ')' : '')}><Icon name="scissors" /></button>
           <button onClick={onFreeze} title={'Freeze: save the frame under the playhead as an image and insert it' + (freezeKey ? ' (' + freezeKey + ')' : '')}><Icon name="snowflake" /></button>
           <button disabled={!state.selection.length} onClick={() => dispatch({ type: 'deleteSelection', keepGap: !rippleOn })} title="Delete selected (Del)"><Icon name="trash" /></button>
+          <button disabled={!ioBoth} onClick={onLift} title={'Lift: remove everything between the In and Out marks and leave the space empty' + (liftKeys[0] ? ' (' + liftKeys[0] + ')' : '')}><Icon name="lift" /></button>
+          <button disabled={!ioBoth} onClick={onExtract} title={'Extract: remove everything between the In and Out marks and close the space' + (liftKeys[1] ? ' (' + liftKeys[1] + ')' : '')}><Icon name="extract" /></button>
         </span>
         <span className="tb-group">
           <button disabled={!state.selection.length} onClick={onCopy} title="Copy the selected clips (Ctrl+C)"><Icon name="copy" size={14} /></button>
           <button disabled={!hasClipboard()} onClick={() => dispatch({ type: 'paste', t: state.playhead })} title="Paste at the playhead (Ctrl+V). A new track is made if no track has room there."><Icon name="paste" size={14} /></button>
           <button disabled={!state.selection.length} onClick={() => dispatch({ type: 'duplicate' })} title="Duplicate the selected clips (Ctrl+D)"><Icon name="duplicate" size={14} /></button>
+          <button disabled={!state.selection.length} onClick={onExportSel} title={'Export only the selected clips: the Export tab opens with them chosen. Clips that are apart are joined one after the other.' + (exportSelKey ? ' (' + exportSelKey + ')' : '')}><Icon name="upload" size={14} /></button>
         </span>
         <span className="tb-group">
           <button disabled={!groupOk} onClick={() => dispatch({ type: 'group' })} title="Group the selected clips so they move together. Detached audio in the selection is attached back to its video."><Icon name="link" /></button>
+          <button disabled={!state.selection.length} onClick={onNest} title={'Nest: make the selected clips one clip that you can move, cut and add effects to as one. Double-click a nest to change what is inside.' + (nestKey ? ' (' + nestKey + ')' : '')}><Icon name="nest" /></button>
           <button disabled={!ungroupOk} onClick={() => dispatch({ type: 'ungroup' })} title="Ungroup the selected group. With no group selected: detach the selected audio (or all the audio of a selected video clip) so it can be moved, trimmed or deleted on its own."><Icon name="unlink" /></button>
         </span>
         <span className="tb-group">
@@ -1038,6 +1188,21 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
         </span>
         <span className="tb-group">
           <button onClick={() => setShowAdd(true)} title="Add an overlay video track or an audio track"><Icon name="plus" size={14} /> Track</button>
+          <span className="th-wrap">
+            <button ref={heightBtn} className={heightOpen ? 'on' : ''} onClick={() => setHeightOpen((o) => !o)} title="Track height: make the video tracks and the sound tracks taller or shorter"><Icon name="trackHeight" size={14} /></button>
+            {heightOpen && (
+              <div className="th-pop">
+                {[['video', 'Video tracks'], ['audio', 'Sound tracks']].map(([kind, label], i) => (
+                  <label key={kind} className="th-row">
+                    <span>{label}{heightKeys[i * 2] ? <em>{heightKeys[i * 2]} / {heightKeys[i * 2 + 1]}</em> : null}</span>
+                    <input type="range" min={ROW_MIN} max={ROW_MAX} value={firstH(kind)} disabled={!kindKeys(kind).length} onChange={(e) => dispatch({ type: 'setRowHeight', keys: kindKeys(kind), h: +e.target.value })} />
+                  </label>
+                ))}
+                <button className="mini wide" onClick={() => dispatch({ type: 'setRowHeight', keys, h: null })}>Normal heights</button>
+                <div className="hint left">Or drag the bottom edge of a track's name. Alt + wheel over a name changes that track, Shift + wheel all tracks of its kind.</div>
+              </div>
+            )}
+          </span>
           <button onClick={fit} title="Zoom so the whole project fits (Shift+F)"><Icon name="fit" size={14} /></button>
           <label className="zoom" title="Zoom the timeline in and out">
             <input type="range" min="0" max="100" value={Math.round((100 * Math.log(Math.max(zoom, 0.2) / 0.2)) / Math.log(2000))} onChange={(e) => setZoom(0.2 * Math.pow(2000, +e.target.value / 100))} />
@@ -1059,6 +1224,12 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
                   </div>
                 ))}
                 <div className="ruler-knob" style={{ left: Math.min(state.playhead, total + 15) * zoom }} />
+                {ioRange && <div className="io-range" style={{ left: ioRange[0] * zoom, width: (ioRange[1] - ioRange[0]) * zoom }} />}
+                {['in', 'out'].map((w) =>
+                  state.mark[w] != null ? (
+                    <div key={w} className={'io-mark ' + w} style={{ left: state.mark[w] * zoom }} onPointerDown={(e) => startMarkDrag(e, w)} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); dispatch({ type: 'setMark', which: w, t: null }) }} title={(w === 'in' ? 'In' : 'Out') + ' mark ' + fmtTime(state.mark[w]) + ': drag to move it, right-click to remove it'} />
+                  ) : null
+                )}
                 {state.markers.map((m) => (
                   <div key={m.id} className="marker" style={{ left: m.t * zoom }} onPointerDown={(e) => startMarkerDrag(e, m)} onDoubleClick={() => setEditMarker(m.id)} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); dispatch({ type: 'removeMarker', id: m.id }) }} title="Marker: click to jump, drag to move, double-click to name it, right-click to delete">
                     <Icon name="flag" size={12} />
@@ -1089,6 +1260,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
           {state.markers.map((m) => (
             <div key={'ml' + m.id} className="marker-line" style={{ left: LABEL + TRACK_PAD + m.t * zoom }} />
           ))}
+          {ioRange && <div className="io-band" style={{ left: LABEL + TRACK_PAD + ioRange[0] * zoom, width: (ioRange[1] - ioRange[0]) * zoom }} />}
           {snapLine != null && <div key={snapLine.toFixed(3)} className="snap-line" style={{ left: LABEL + TRACK_PAD + snapLine * zoom }}><span>{fmtTime(snapLine)}</span></div>}
           <div className="playhead" style={{ left: LABEL + TRACK_PAD + Math.min(state.playhead, total + 15) * zoom }} />
           {marquee && (

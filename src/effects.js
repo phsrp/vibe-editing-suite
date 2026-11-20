@@ -2,6 +2,8 @@
 // A clip stores fx = { blur, sharpen, vignette, glow, key: {on, color, sim, smooth, spill}, cc: {...} }, each value
 // as the slider shows it (see the arrays below). The picture is changed inside the shader (glRenderer.js).
 
+import { lutNow } from './luts.js'
+
 // the sliders: id, label, unit, default, min, max, step
 export const FX_SLIDERS = [
   { id: 'blur', label: 'Blur', def: 0, min: 0, max: 100, step: 1 },
@@ -30,6 +32,7 @@ export function hasFx(clip) {
   if (!fx) return false
   if (FX_SLIDERS.some((s) => num(fx[s.id], 0) !== 0)) return true
   if (fx.key && fx.key.on) return true
+  if (fx.lut && fx.lut.file && (fx.lut.mix ?? 100) > 0) return true
   return hasCc(fx.cc)
 }
 
@@ -50,7 +53,15 @@ export function fxUniforms(fx) {
     c2: [num(cc.tint, 0) / 100, num(cc.exposure, 0) / 100, num(cc.highlights, 0) / 100, num(cc.shadows, 0) / 100],
     k: [num(key.sim, 35) / 100, num(key.smooth, 10) / 100, num(key.spill, 50) / 100, key.on ? 1 : 0],
     kc: hex(key.color),
+    lu: lutUniform(f.lut),
   }
+}
+// the LUT: [table size, strength 0..1], or none while it is not loaded
+function lutUniform(lut) {
+  if (!lut || !lut.file) return [2, 0]
+  const mix = num(lut.mix, 100) / 100
+  const t = mix > 0 ? lutNow(lut.file) : null
+  return t ? [t.n, mix] : [2, 0]
 }
 // ready-made looks for the Colour tab (they only set the sliders; you can adjust them afterwards)
 export const CC_PRESETS = [

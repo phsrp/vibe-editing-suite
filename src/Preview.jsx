@@ -8,6 +8,7 @@ import WarpOverlay from './WarpOverlay.jsx'
 import { drawText, loadFont } from './textRender.js'
 import TransformOverlay from './TransformOverlay.jsx'
 import MaskOverlay from './MaskOverlay.jsx'
+import { stabFor } from './stabilize.js'
 
 // One shared Web Audio context: every audio element goes through a gain node, which lets the volume go
 // above 100% (up to 200%). A plain <audio> element can only be turned down.
@@ -20,6 +21,48 @@ const getCtx = () => {
   }
   return audioCtx
 }
+
+// Every sound goes into one master bus, so the level meters can listen to what you hear (after volume and fades).
+// Mono sound is spread to both sides before the meters split it into left and right.
+let master = null
+const masterIn = () => {
+  const ctx = getCtx()
+  if (!master) {
+    const gain = ctx.createGain()
+    gain.connect(ctx.destination)
+    const wide = ctx.createGain()
+    wide.channelCount = 2
+    wide.channelCountMode = 'explicit'
+    wide.channelInterpretation = 'speakers'
+    gain.connect(wide)
+    const split = ctx.createChannelSplitter(2)
+    wide.connect(split)
+    const an = [0, 1].map((i) => {
+      const a = ctx.createAnalyser()
+      a.fftSize = 2048
+      split.connect(a, i)
+      return a
+    })
+    master = { gain, an, buf: new Float32Array(2048) }
+  }
+  return master.gain
+}
+// the sound playing right now: [{peak, rms}] for left and right (0..1, 1 = the loudest a file can hold), or null
+export function meterLevels() {
+  if (!master || !audioCtx || audioCtx.state !== 'running') return null
+  return master.an.map((a) => {
+    a.getFloatTimeDomainData(master.buf)
+    let p = 0
+    let s = 0
+    for (const v of master.buf) {
+      const x = Math.abs(v)
+      if (x > p) p = x
+      s += v * v
+    }
+    return { peak: p, rms: Math.sqrt(s / master.buf.length) }
+  })
+}
+if (typeof window !== 'undefined') window.__meterLevels = meterLevels // developer self-test
 
 // Owns the canvas, the playback clock and the <video>/<img> elements.
 export default function Preview({ state, dispatch, transitions, onCompiled, active = true, mode = 'none', setMode = () => {}, freeMode = false }) {
@@ -121,7 +164,7 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
         const ctx = getCtx()
         const gain = ctx.createGain()
         ctx.createMediaElementSource(el).connect(gain)
-        gain.connect(ctx.destination)
+        gain.connect(masterIn())
         e = { el, gain, file }
         aels.current.set(key, e)
       }
@@ -170,8 +213,9 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
         const ae = getAudio(key, w.file)
         const el = ae.el
         ae.gain.gain.value = Math.max(0, Math.min(4, w.vol))
-        if (w.rate && el.playbackRate !== w.rate) el.playbackRate = w.rate
-        if (s.playing) {
+        const r = Math.min(16, (w.rate || 1) * Math.max(1, rateNow))
+        if (el.playbackRate !== r) el.playbackRate = r
+        if (s.playing && rateNow > 0 && rateNow <= 2) {
           if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume().catch(() => {})
           if (Math.abs(el.currentTime - w.src) > 0.25) el.currentTime = w.src
           if (el.paused) el.play().catch(() => {})
@@ -234,6 +278,7 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
 
     // how many videos are still on their way to the frame they should show (the AI connection waits for none)
     let unsettled = 0
+    let rateNow = 1 // J/K/L speed of this frame (negative = backwards)
     function syncClip(clip, t, playing, media) {
       const e = getEl(clip, media)
       if (e.kind === 'video') {
@@ -241,6 +286,12 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
         let src = srcAt(clip, t)
         let want = playPath(media)
         let canPlay = true
+        // a stabilised clip plays its steadied copy once that is ready (the original until then)
+        const sb = !clip.reverse && clip.stab ? stabFor(clip, media) : null
+        if (sb) {
+          want = sb.path
+          src = srcAt(clip, t) - sb.from
+        }
         if (clip.reverse) {
           const pp = proxyFor(clip, media)
           if (pp) {
@@ -252,10 +303,15 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
           e.srcPath = want
           setVideoSrc(v, want)
         }
-        if (v.playbackRate !== speedOf(clip)) v.playbackRate = speedOf(clip)
-        playing = playing && canPlay
-        if (playing) {
-          if (Math.abs(v.currentTime - src) > 0.3) v.currentTime = src
+        const back = playing && rateNow < 0 // backwards: the video cannot play that way, it jumps to each frame instead
+        const vr = Math.min(16, speedOf(clip) * Math.max(1, rateNow))
+        if (v.playbackRate !== vr) v.playbackRate = vr
+        playing = playing && canPlay && !back
+        if (back) {
+          if (!v.paused) v.pause()
+          if (!v.seeking && Math.abs(v.currentTime - src) > 0.02) v.currentTime = src
+        } else if (playing) {
+          if (Math.abs(v.currentTime - src) > 0.3 * Math.max(1, rateNow)) v.currentTime = src
           if (v.paused) v.play().catch(() => {})
         } else {
           if (!v.paused) v.pause()
@@ -299,16 +355,19 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
       const mainTotal = totalDuration(s.clips)
       const total = projectDuration(s)
 
-      // playback clock
+      // playback clock (J/K/L: playRate is the speed, below 0 = backwards; Play In to Out: playUntil is where it stops)
       let t = s.playhead
+      const rate = s.playing ? s.playRate || 1 : 1
+      rateNow = rate
       if (s.playing) {
-        if (!clock.playing || clock.seek !== s.seekId) {
-          if (!clock.playing && t >= total - 0.05) t = 0
-          clock = { ms: now, t0: t, seek: s.seekId, playing: true }
+        if (!clock.playing || clock.seek !== s.seekId || clock.rate !== rate) {
+          if (!clock.playing && rate > 0 && s.playUntil == null && t >= total - 0.05) t = 0
+          clock = { ms: now, t0: t, seek: s.seekId, playing: true, rate }
         }
-        t = clock.t0 + (now - clock.ms) / 1000
-        if (t >= total) {
-          t = total
+        t = clock.t0 + ((now - clock.ms) / 1000) * rate
+        const stopAt = s.playUntil != null ? Math.min(total, s.playUntil) : total
+        if ((rate > 0 && t >= stopAt) || (rate < 0 && t <= 0)) {
+          t = rate > 0 ? stopAt : 0
           dispatch({ type: 'setPlaying', value: false })
           clock.playing = false
         }
@@ -592,6 +651,7 @@ export default function Preview({ state, dispatch, transitions, onCompiled, acti
             is ready (it is made in the background, see the file's progress on the left) it opens straight away.
           </div>
         )}
+        {state.playing && (state.playRate || 1) !== 1 && <div className="pv-rate">{state.playRate < 0 ? 'Backwards ' : ''}{Math.abs(state.playRate)}×</div>}
         {mode === 'warp' && <WarpOverlay state={state} dispatch={dispatch} />}
         {mode === 'transform' && <TransformOverlay state={state} dispatch={dispatch} free={freeMode} box={box} />}
         {(mode === 'mask' || mode === 'maskdraw' || mode === 'maskpoly' || mode === 'maskdrawsmart') && (

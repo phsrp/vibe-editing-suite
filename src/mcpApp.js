@@ -14,6 +14,7 @@ import { PRESET_LIST } from './ExportTab.jsx'
 import { loadImageUrl } from './paint/raster.js'
 import { builtinBrushes } from './paint/builtinBrushes.js'
 import { loadPacks } from './paint/usePaintKit.js'
+import { BUILTIN_LUTS, loadLut, forgetLut } from './luts.js'
 import { transitionError } from './mcpPicture.js'
 
 // a shortcut as the editor writes it: Ctrl, Alt, Shift in that order, then one key
@@ -201,6 +202,20 @@ export async function appTool(name, args, ctxRef) {
       if (ctx.theme === t.id) ctx.setTheme('dark')
       await ctx.setSettings({ themes: ctx.themes.filter((x) => x.id !== t.id) })
       return { text: `Deleted "${t.name}".` }
+    }
+    case 'list_luts':
+      return json({ builtIn: BUILTIN_LUTS.map((l) => ({ file: l.file, name: l.name })), yours: (await window.api.listLuts()).map((l) => ({ file: l.file, name: l.name })) })
+    case 'import_luts': {
+      need(Array.isArray(args.paths) && args.paths.length, 'Give paths of .cube files.')
+      for (const p of args.paths) need(/\.cube$/i.test(String(p)), `${p} is not a .cube file.`)
+      const names = await window.api.importLuts(args.paths.map(String))
+      names.forEach(forgetLut)
+      const bad = []
+      for (const n of names) {
+        const t = await loadLut(n)
+        if (t.error) bad.push(n + ': ' + t.error)
+      }
+      return json({ added: names, ...(bad.length ? { problems: bad } : {}) })
     }
     case 'list_brushes': {
       const one = (b) => ({ id: b.id, name: b.name, size: b.size })

@@ -1,7 +1,7 @@
 // The AI connection, page side: what each tool does (the list and its descriptions are in electron/mcpTools.js).
 // An AI app goes through the same actions as the buttons, so its changes show up at once and Ctrl+Z takes them back.
 // mcpApp.js = the editor as a whole, mcpPicture.js = what is special in picture projects, this file = the rest.
-import { layout, overlayLayout, audioLayout, srcAt, tlOf, projectDuration, sectionOf, rowKeys, hasAttached, isLocked, streamCount, streamAudioOf, audioClipVol, copySelection, clipPicture, aspectRatio, ASPECTS, uid } from './state.js'
+import { layout, overlayLayout, audioLayout, srcAt, tlOf, projectDuration, sectionOf, piecesOf, clipPieces, rowKeys, rowHeight, rowKind, ROW_MIN, ROW_MAX, markRange, trimEdit, speedOf, hasAttached, isLocked, streamCount, streamAudioOf, audioClipVol, copySelection, clipPicture, aspectRatio, ASPECTS, uid } from './state.js'
 import { evalProp, keyAt, PROPS, EASES, WARP_ZERO } from './motion.js'
 import { CC_DEFAULTS, CC_SLIDERS, CC_PRESETS, FX_SLIDERS } from './effects.js'
 import { TEXT_PRESETS } from './textRender.js'
@@ -16,6 +16,9 @@ import { sequenceWords, wordsRange, fillerRanges, pauseRanges } from './Transcri
 import { runExport, cancelExport, isExporting } from './exporter.js'
 import { load as exportDefaults, presetPatch } from './ExportTab.jsx'
 import { LABELS } from './labels.js'
+import { BUILTIN_LUTS, loadLut } from './luts.js'
+import { stabState } from './stabilize.js'
+import { nestPlan, makeNest } from './nest.js'
 
 const round = (v) => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : v)
 const wait = (ms = 90) => new Promise((r) => setTimeout(r, ms))
@@ -26,6 +29,10 @@ const need = (ok, msg) => {
 const pct = (v) => (v == null ? undefined : +v / 100)
 
 // find a clip anywhere on the timeline
+const limitH = (v) => {
+  need(Number.isFinite(+v) && +v >= ROW_MIN && +v <= ROW_MAX, `A track height is ${ROW_MIN} to ${ROW_MAX} pixels.`)
+  return +v
+}
 function locate(s, id) {
   const main = layout(s.clips).find((c) => c.id === id)
   if (main) return { clip: main, where: 'main' }
@@ -80,6 +87,11 @@ function describeClip(c, s, where) {
   if (c.label) out.label = c.label
   if (c.transition && c.transition.name) out.transitionIn = { name: c.transition.name, seconds: c.transition.duration }
   if (c.fx) out.effects = c.fx
+  if (c.stab && m) {
+    const st = stabState(c, m)
+    out.stabilize = { strength: c.stab.strength ?? 50, ready: !!(st && st.ready), percent: st ? Math.round(st.pct || 0) : 0, ...(st && st.error ? { error: st.error } : {}) }
+  }
+  if (m && m.nest) out.nest = true
   if (c.text) {
     out.text = c.text
     out.textBox = textBox(s, c) // where the words are, in % of the frame
@@ -112,7 +124,7 @@ function describeClip(c, s, where) {
 function projectSummary(s) {
   const tracks = []
   for (const key of rowKeys(s)) {
-    const base = { key, locked: s.lockedRows.includes(key), hidden: s.hiddenRows.includes(key) }
+    const base = { key, locked: s.lockedRows.includes(key), hidden: s.hiddenRows.includes(key), height: rowHeight(s, key) }
     if (key === 'main') tracks.push({ name: s.mainName, type: 'main video', ...base, clips: layout(s.clips).map((c) => describeClip(c, s, 'main')) })
     else if (key.startsWith('v:')) {
       const t = s.videoTracks.find((x) => x.id === key.slice(2))
@@ -120,6 +132,11 @@ function projectSummary(s) {
     } else if (key.startsWith('a:')) {
       const t = s.audioTracks.find((x) => x.id === key.slice(2))
       tracks.push({ name: t.name, type: 'audio', volume: t.volume, mute: !!t.mute, ...base, clips: audioLayout(s.audioClips).filter((c) => c.trackId === t.id).map((c) => describeClip(c, s, 'audio')) })
+    } else if (key.startsWith('s:')) {
+      // the sound of the main track's videos (stream n): its clips are the main clips, listed there with their sound
+      const n = +key.slice(2)
+      const st = s.streamSettings[n] || {}
+      tracks.push({ name: st.name || `Video audio ${n + 1}`, type: 'video sound', stream: n, volume: st.volume ?? 1, mute: !!st.mute, ...base })
     }
   }
   return {
@@ -127,7 +144,8 @@ function projectSummary(s) {
     length: round(projectDuration(s)),
     playhead: round(s.playhead),
     shape: s.aspect,
-    files: s.media.map((m) => ({ id: m.id, name: m.name, type: m.type, seconds: round(m.duration), width: m.width, height: m.height, audioStreams: (m.audioStreams || []).length, hasTranscript: !!(s.transcripts && s.transcripts[m.id]), missing: !!m.missing })),
+    files: s.media.map((m) => ({ id: m.id, name: m.name, type: m.type, seconds: round(m.duration), width: m.width, height: m.height, audioStreams: (m.audioStreams || []).length, hasTranscript: !!(s.transcripts && s.transcripts[m.id]), missing: !!m.missing, ...(m.mark ? { usesPart: [round(m.mark.in ?? 0), round(m.mark.out ?? m.duration)] } : {}), ...(m.nest ? { nest: true } : {}) })),
+    marks: { in: s.mark && s.mark.in != null ? round(s.mark.in) : null, out: s.mark && s.mark.out != null ? round(s.mark.out) : null },
     tracks,
     audioThatFollowsMainClips: streamCount(s),
     markers: s.markers.map((m) => ({ id: m.id, time: round(m.t), label: m.label })),
@@ -158,7 +176,7 @@ function soundOf(s, id) {
   return { st: audioClipVol(a), file: a.stream != null ? (m.audioFiles || [])[a.stream] : m.path, from: a.in, to: a.out, src: (t) => a.in + (t - a.start) }
 }
 
-const VIDEO_ONLY = new Set(['get_transcript', 'get_words', 'remove_words', 'add_clip', 'move_clip', 'trim_clip', 'split_clip', 'copy_clips', 'paste_clips', 'duplicate_clips', 'group_clips', 'ungroup_clips', 'set_label', 'freeze_frame', 'close_gap', 'cut_ranges', 'set_speed', 'set_transition', 'follow_subject', 'track_mask', 'subject_in_front', 'set_audio', 'add_marker', 'edit_marker', 'seek', 'set_playing', 'set_timeline_option', 'add_track', 'set_track', 'remove_track', 'set_aspect', 'remove_media', 'make_captions', 'save_subtitles', 'start_voiceover', 'stop_voiceover', 'open_export', 'export_video', 'list_versions', 'restore_version'])
+const VIDEO_ONLY = new Set(['set_marks', 'set_source_marks', 'trim_edit', 'get_sound_levels', 'set_stabilize', 'nest_clips', 'open_nest', 'update_nest', 'get_transcript', 'get_words', 'remove_words', 'add_clip', 'move_clip', 'trim_clip', 'split_clip', 'copy_clips', 'paste_clips', 'duplicate_clips', 'group_clips', 'ungroup_clips', 'set_label', 'freeze_frame', 'close_gap', 'cut_ranges', 'set_speed', 'set_transition', 'follow_subject', 'track_mask', 'subject_in_front', 'set_audio', 'add_marker', 'edit_marker', 'seek', 'set_playing', 'set_timeline_option', 'add_track', 'set_track', 'remove_track', 'set_aspect', 'remove_media', 'make_captions', 'save_subtitles', 'start_voiceover', 'stop_voiceover', 'open_export', 'export_video', 'list_versions', 'restore_version'])
 
 // ctx = the ref in App.jsx: project() = {id, handle} of the project in use, or null, and what the window can do
 export async function runTool(name, args, ctxRef) {
@@ -371,10 +389,118 @@ export async function runTool(name, args, ctxRef) {
       D({ type: 'closeGap', id: args.clipId })
       return { text: 'Done.' }
     case 'cut_ranges': {
-      need(Array.isArray(args.ranges) && args.ranges.length, 'Give ranges, like [[3, 5.5], [10, 12]].')
-      D({ type: 'rippleDelete', ranges: args.ranges.map(([a, b]) => [+a, +b]) })
+      let ranges = args.ranges
+      if (args.useMarks) {
+        need(s.mark && s.mark.in != null && s.mark.out != null, 'Set an In and an Out mark first (set_marks).')
+        ranges = [markRange(s)]
+      }
+      need(Array.isArray(ranges) && ranges.length, 'Give ranges, like [[3, 5.5], [10, 12]], or useMarks.')
+      if (args.keepSpace) {
+        // lift, the latest first so the earlier times stay valid
+        for (const [a, b] of [...ranges].map(([a, b]) => [+a, +b]).sort((p, q) => q[0] - p[0])) D({ type: 'lift', t0: a, t1: b })
+        await wait()
+        return { text: 'Taken out; the time is left empty.' }
+      }
+      D({ type: 'rippleDelete', ranges: ranges.map(([a, b]) => [+a, +b]) })
       await wait()
       return { text: 'Cut, and the gaps closed.' }
+    }
+    case 'set_marks': {
+      if (args.clear) D({ type: 'clearMarks' })
+      if (args.in != null) D({ type: 'setMark', which: 'in', t: Math.max(0, +args.in) })
+      if (args.out != null) D({ type: 'setMark', which: 'out', t: Math.max(0, +args.out) })
+      await wait()
+      const mk = state().mark
+      return json({ in: mk.in == null ? null : round(mk.in), out: mk.out == null ? null : round(mk.out) })
+    }
+    case 'set_source_marks': {
+      const m = s.media.find((x) => x.id === args.mediaId)
+      need(m, `There is no file with the id ${args.mediaId}. See get_project.`)
+      need(m.type === 'video' || m.type === 'audio', 'Only video and sound files have a part to mark.')
+      if (args.clear) {
+        D({ type: 'setSourceMark', id: m.id, mark: null })
+        return { text: 'The whole file is used again.' }
+      }
+      const a = args.in == null ? 0 : +args.in
+      const b = args.out == null ? m.duration : +args.out
+      need(a >= 0 && b <= m.duration + 0.01 && b - a >= 0.1, `in and out must be inside the file (0 to ${round(m.duration)} s), at least 0.1 s apart.`)
+      D({ type: 'setSourceMark', id: m.id, mark: { in: a, out: Math.min(b, m.duration) } })
+      return { text: `Adding this file now uses ${round(a)} to ${round(b)} s of it.` }
+    }
+    case 'trim_edit': {
+      const { clip, where } = editable(s, args.clipId)
+      const mode = args.mode
+      need(['ripple', 'roll', 'slip', 'slide'].includes(mode), 'mode is ripple, roll, slip or slide.')
+      need(mode === 'slip' || mode === 'slide' || ['in', 'out'].includes(args.edge), 'edge is in or out for ripple and roll.')
+      need(Number.isFinite(+args.seconds), 'Give seconds.')
+      need(!clip.reverse, 'The trim tools do not work on a reversed clip.')
+      const d = mode === 'slip' ? -(+args.seconds) / (where === 'audio' ? 1 : speedOf(clip)) : +args.seconds
+      const items = trimEdit(s, { mode, id: clip.id, edge: args.edge, d })
+      need(items, mode === 'roll' ? 'There is no clip touching that edge to roll with.' : mode === 'slip' ? 'Only video and sound clips can slip (pictures and text have no other part to show).' : mode === 'slide' ? 'A clip can only slide on the main track when there is a clip before it.' : 'That cannot be done here.')
+      D({ type: 'setRanges', items, commit: true })
+      await wait()
+      const ns = state()
+      return json({ changed: items.map((i) => { try { const f = locate(ns, i.id); return describeClip(f.clip, ns, f.where) } catch { return { id: i.id } } }) })
+    }
+    case 'get_sound_levels': {
+      ctx.focus(p.id)
+      const secs = Math.max(0.5, Math.min(10, +args.seconds || 3))
+      const t = args.time != null ? Math.max(0, +args.time) : s.playhead
+      D({ type: 'setPlayhead', t, user: true })
+      D({ type: 'setPlaying', value: true, until: t + secs })
+      await new Promise((r) => setTimeout(r, 250))
+      const peak = [0, 0]
+      const sq = [0, 0]
+      let n = 0
+      const end = performance.now() + secs * 1000
+      while (performance.now() < end) {
+        const lv = window.__meterLevels && window.__meterLevels()
+        if (lv) {
+          for (const k of [0, 1]) {
+            peak[k] = Math.max(peak[k], lv[k].peak)
+            sq[k] += lv[k].rms * lv[k].rms
+          }
+          n++
+        }
+        await new Promise((r) => setTimeout(r, 40))
+      }
+      D({ type: 'setPlaying', value: false })
+      const dB = (v) => (v > 0.00001 ? round(20 * Math.log10(v)) : null)
+      const side = (k) => ({ peakDb: dB(peak[k]), averageDb: n ? dB(Math.sqrt(sq[k] / n)) : null })
+      if (!n || (peak[0] < 0.00001 && peak[1] < 0.00001)) return json({ from: round(t), seconds: secs, silent: true, note: 'Nothing was heard there (no sound, or it is muted).' })
+      return json({ from: round(t), seconds: secs, left: side(0), right: side(1), tooLoud: Math.max(...peak) >= 0.999 })
+    }
+    case 'set_stabilize': {
+      const { clip } = editable(s, args.clipId)
+      const m = s.media.find((x) => x.id === clip.mediaId)
+      need(m && m.type === 'video', 'Only video clips can be steadied.')
+      need(!clip.reverse || args.on === false, 'A reversed clip cannot be stabilised. Turn reverse off first (set_speed).')
+      const strength = args.strength != null ? Math.max(0, Math.min(100, +args.strength)) : clip.stab ? clip.stab.strength ?? 50 : 50
+      D({ type: 'setStab', id: clip.id, stab: args.on === false ? null : { strength } })
+      return { text: args.on === false ? 'Back to the original picture.' : 'Steadying started. get_project shows stabilize.ready once the preview uses it; the export waits for it by itself.' }
+    }
+    case 'nest_clips': {
+      need(Array.isArray(args.clipIds) && args.clipIds.length, 'Give clipIds.')
+      for (const id of args.clipIds) locate(s, id)
+      const plan = nestPlan(s, args.clipIds)
+      need(!plan.error, plan.error)
+      need(!jobRunning() && !isExporting(), 'Something else is running. Use check_job, or wait for it to finish.')
+      makeNest({ getState: () => h.getState(), dispatch: D, ids: args.clipIds, name: args.name, byPerson: false }).catch(() => {})
+      return json({ state: 'started', next: 'Call check_job every few seconds until it says done; its result has the new clip id.' })
+    }
+    case 'open_nest': {
+      const { clip } = locate(s, args.clipId)
+      const m = s.media.find((x) => x.id === clip.mediaId)
+      need(m && m.nest, 'That clip is not a nest.')
+      live.openNest(m.id)
+      await new Promise((r) => setTimeout(r, 1500))
+      return { text: 'The inside of the nest is open in a new tab and is now the project in front. Change it, then call update_nest.' }
+    }
+    case 'update_nest': {
+      need(live.isNest, 'The project in front is not the inside of a nest. Use open_nest first.')
+      need(!jobRunning() && !isExporting(), 'Something else is running. Use check_job, or wait for it to finish.')
+      live.updateNest()
+      return json({ state: 'started', next: 'Call check_job every few seconds until it says done.' })
     }
     case 'set_speed': {
       const { clip } = picture(s, args.clipId)
@@ -475,6 +601,21 @@ export async function runTool(name, args, ctxRef) {
       const dur = args.duration == null ? Math.min(1, most) : +args.duration
       need(dur > 0 && dur <= most, `duration must be more than 0 and at most ${most} seconds here.`)
       D({ type: 'setTransition', id: clip.id, transition: args.name ? { name: args.name, duration: dur } : null })
+      return { text: 'Done.' }
+    }
+    case 'set_lut': {
+      const { clip } = picture(s, args.clipId)
+      const file = String(args.lut || '').trim()
+      if (!file) {
+        D({ type: 'setFx', id: clip.id, patch: { lut: null } })
+        return { text: 'The LUT is off.' }
+      }
+      const known = BUILTIN_LUTS.some((l) => l.file === file) || (await window.api.listLuts()).some((l) => l.file === file)
+      need(known, `There is no LUT ${file}. See list_luts (import_luts adds .cube files).`)
+      const t = await loadLut(file)
+      need(!t.error, 'That LUT cannot be used: ' + t.error)
+      D({ type: 'checkpoint' })
+      D({ type: 'setFx', id: clip.id, patch: { lut: { file, mix: args.strength != null ? Math.max(0, Math.min(100, +args.strength)) : 100 } } })
       return { text: 'Done.' }
     }
     case 'set_effect': {
@@ -671,11 +812,17 @@ export async function runTool(name, args, ctxRef) {
       return { text: 'Done.' }
     case 'set_playing':
       ctx.focus(p.id)
-      D({ type: 'setPlaying', value: !!args.playing })
+      need(args.rate == null || (Math.abs(+args.rate) >= 0.5 && Math.abs(+args.rate) <= 8), 'rate is -8 to -1 (backwards) or 1 to 8.')
+      D({ type: 'setPlaying', value: !!args.playing, rate: args.rate != null ? Math.sign(+args.rate) * Math.max(1, Math.min(8, Math.abs(+args.rate))) : 1, until: args.until != null ? +args.until : undefined })
       return { text: 'Done.' }
     case 'set_timeline_option':
       if (args.snap != null) live.setSnapOn(!!args.snap)
       if (args.closeGaps != null) live.setRippleOn(!!args.closeGaps)
+      // every video track / every sound track as tall as this (0 = back to normal)
+      for (const kind of ['video', 'audio']) {
+        const v = args[kind + 'TrackHeight']
+        if (v != null) D({ type: 'setRowHeight', keys: rowKeys(s).filter((k) => rowKind(k) === kind), h: +v === 0 ? null : limitH(v) })
+      }
       return { text: 'Done.' }
     case 'add_track': {
       need(['video', 'audio'].includes(args.kind), 'kind is video or audio.')
@@ -692,6 +839,7 @@ export async function runTool(name, args, ctxRef) {
       if (args.locked != null && !!args.locked !== s.lockedRows.includes(key)) D({ type: 'toggleRowLock', key })
       if (args.hidden != null && !!args.hidden !== s.hiddenRows.includes(key)) D({ type: 'toggleRowHide', key })
       if (args.index != null) D({ type: 'moveRow', key, toIndex: +args.index })
+      if (args.height != null) D({ type: 'setRowHeight', keys: [key], h: limitH(args.height) })
       const lane = {}
       if (args.volume != null) lane.volume = Math.max(0, Math.min(2, +args.volume))
       if (args.mute != null) lane.mute = !!args.mute
@@ -784,10 +932,23 @@ export async function runTool(name, args, ctxRef) {
       for (const k of ['res', 'fps', 'codec', 'bitrate', 'container', 'speed', 'audioKbps', 'encoder', 'loudness', 'audioFormat']) if (args[k] != null) st[k] = args[k]
       if (args.soundOnly) st.outputKind = 'audio'
       const total = projectDuration(s)
-      const a = args.from == null ? 0 : +args.from
-      const b = args.to == null ? total : Math.min(+args.to, total)
-      const part = args.from != null || args.to != null
+      const mr = args.useMarks ? markRange(s) : null
+      need(!args.useMarks || mr, 'Set In and Out marks first (set_marks).')
+      need(!args.useMarks || (args.from == null && args.to == null && !args.clipIds), 'Use either useMarks, from/to or clipIds.')
+      const a = mr ? mr[0] : args.from == null ? 0 : +args.from
+      const b = mr ? mr[1] : args.to == null ? total : Math.min(+args.to, total)
+      const part = !!mr || args.from != null || args.to != null
       if (part) need(a >= 0 && b - a >= 0.5, `from and to must give at least half a second of the video, which is ${round(total)} s long.`)
+      // clipIds: only the time those clips cover, joined one after the other
+      const ids = Array.isArray(args.clipIds) ? args.clipIds.map(String) : null
+      need(!ids || !part, 'Use either clipIds or from/to, not both.')
+      let pieces = null
+      if (ids) {
+        need(ids.length, 'clipIds is empty.')
+        for (const id of ids) locate(s, id)
+        pieces = clipPieces(s, ids)
+        need(pieces.reduce((n, [x, y]) => n + y - x, 0) >= 0.5, 'Those clips are shorter than half a second together.')
+      }
       const ext = st.outputKind === 'audio' ? st.audioFormat : st.container
       need(String(args.path || '').toLowerCase().endsWith('.' + ext), `For these settings the path must end in .${ext}.`)
       const enc = await window.api.exportEncoders()
@@ -796,7 +957,7 @@ export async function runTool(name, args, ctxRef) {
         onCancel(cancelExport)
         let check = null
         const transitions = await window.api.listTransitions()
-        const file = await runExport({ state: part ? sectionOf(state(), a, b) : state(), settings: st, transitions, outPath: args.path, onCheck: (c) => (check = c), onProgress: (x) => progress(Math.round(x.pct), 100, x.label) })
+        const file = await runExport({ state: pieces ? piecesOf(state(), pieces) : part ? sectionOf(state(), a, b) : state(), settings: st, transitions, outPath: args.path, onCheck: (c) => (check = c), onProgress: (x) => progress(Math.round(x.pct), 100, x.label) })
         return { file, check }
       })
       return json({ state: 'started', next: 'Call check_job every 15 seconds or so until it says done. The person sees the progress and can cancel.' })

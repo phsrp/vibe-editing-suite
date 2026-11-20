@@ -17,6 +17,8 @@ export function serialize(state) {
       width: m.width,
       height: m.height,
       audioStreams: m.audioStreams,
+      mark: m.mark,
+      nest: m.nest,
     })),
     clips: state.clips,
     audioClips: state.audioClips,
@@ -31,6 +33,8 @@ export function serialize(state) {
     markers: state.markers,
     lockedRows: state.lockedRows,
     hiddenRows: state.hiddenRows,
+    rowH: state.rowH,
+    mark: state.mark,
   })
 }
 
@@ -52,10 +56,10 @@ export async function restore(json) {
     const id = item ? item.id : m.id
     idMap.set(m.id, id)
     if (media.some((x) => x.id === id)) continue
-    if (item) media.push({ ...item, name: m.name || item.name }) // (a name given in the editor, like a freeze frame's, stays)
+    if (item) media.push({ ...item, name: m.name || item.name, mark: m.mark, nest: m.nest }) // (a name given in the editor, like a freeze frame's, stays; the source In/Out too)
     else {
       missing.push(m.name)
-      media.push({ ...m, thumb: null, audioFiles: [], audioPending: false, missing: true })
+      media.push({ ...m, thumb: null, audioFiles: [], audioPending: false, missing: true }) // (a nest keeps its inside: open it and update it to make the file again)
     }
   }
   const remap = (list) => list.map((x) => ({ ...x, mediaId: idMap.get(x.mediaId) || x.mediaId }))
@@ -71,6 +75,8 @@ export async function restore(json) {
     markers: data.markers || [],
     lockedRows: data.lockedRows || [],
     hiddenRows: data.hiddenRows || [],
+    rowH: data.rowH || {},
+    mark: data.mark || { in: null, out: null },
     audioTracks: data.audioTracks || [],
     streamSettings: data.streamSettings || {},
     // what was said in each video; their file ids may have changed when the files were read again

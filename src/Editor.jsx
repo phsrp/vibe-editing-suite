@@ -1,5 +1,8 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
-import { reducer, initialState, layout, projectDuration, fmtTime, toUrl, copySelection, srcAt, ASPECTS, uid } from './state.js'
+import { makeNest, updateNest } from './nest.js'
+import Meter from './Meter.jsx'
+import SourceDialog from './SourceDialog.jsx'
+import { reducer, initialState, layout, projectDuration, fmtTime, toUrl, copySelection, srcAt, ASPECTS, uid, markRange, sourceRange } from './state.js'
 import Preview from './Preview.jsx'
 import Timeline from './Timeline.jsx'
 import KeybindDialog from './KeybindDialog.jsx'
@@ -17,7 +20,7 @@ import { VIDEO_STEPS } from './tourSteps.js'
 
 // One open project. Several of these can exist at once (one per tab); only the active one is shown
 // and reacts to the keyboard, the others keep their state and wait.
-export default function Editor({ tabId, active, initial, binds, setBinds, onMeta, onNew, onOpen, onExport, onOpenColour, onOpenJson, registerHandle }) {
+export default function Editor({ tabId, active, initial, binds, setBinds, onMeta, onNew, onOpen, onExport, onOpenColour, onOpenJson, registerHandle, outerHandle }) {
   const [state, dispatch] = useReducer(reducer, initialState)
   const stateRef = useRef(state)
   stateRef.current = state
@@ -136,6 +139,40 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
 
   if (active) window.__vibe = { dispatch, state, addMedia, historyKey: () => historyKey() } // used by the developer self-test
 
+  // ---- nesting: a nest of the selected clips; a nest opens in its own tab; there, Save (Ctrl+S) = Update the nest
+  const nestOf = initial && initial.nestOf // {tabId, mediaId, name}: this tab is the inside of that project's nest
+  const [nestMedia, setNestMedia] = useState(nestOf ? nestOf.mediaId : null) // (the nest gets a new file each update)
+  const nestMediaRef = useRef(nestMedia)
+  nestMediaRef.current = nestMedia
+  const doNest = () =>
+    makeNest({ getState: () => stateRef.current, dispatch, ids: stateRef.current.selection })
+      .then(() => flash('Nested: the clips are one clip now. Double-click it (or use Open the nest) to change what is inside.'))
+      .catch((e) => flash(/cancel/i.test(e.message) ? 'Nesting cancelled.' : e.message))
+  const openNest = (mediaId) => {
+    const m = stateRef.current.media.find((x) => x.id === mediaId)
+    if (!m || !m.nest) return
+    onOpenJson(m.nest.json, { mediaId, name: m.nest.name || m.name })
+  }
+  const updateThisNest = async () => {
+    const outer = outerHandle && outerHandle()
+    if (!outer) {
+      flash('The project this nest belongs to is closed, so the nest cannot be updated from here.')
+      return false
+    }
+    try {
+      const id = await updateNest({ outer, mediaId: nestMediaRef.current, innerState: stateRef.current })
+      setNestMedia(id)
+      savedJson.current = serialize(stateRef.current)
+      setDirty(false)
+      flash('The nest is updated in the project.')
+      return true
+    } catch (e) {
+      flash(/cancel/i.test(e.message) ? 'Update cancelled.' : 'The nest could not be updated: ' + e.message)
+      return false
+    }
+  }
+  const [tool, setTool] = useState('select') // the timeline tool: select | ripple | roll | slip | slide
+  const [showSource, setShowSource] = useState(null) // the media item open in the source viewer (to mark the part to use)
   const flash = (msg) => {
     setNote(msg)
     setTimeout(() => setNote((n) => (n === msg ? '' : n)), 3500)
@@ -202,15 +239,15 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
     setBusy(true)
     try {
       const r = await restore(json)
-      dispatch({ type: 'loadProject', media: r.media, clips: r.clips, audioClips: r.audioClips, audioTracks: r.audioTracks, streamSettings: r.streamSettings, transcripts: r.transcripts, overlayClips: r.overlayClips, videoTracks: r.videoTracks, mainName: r.mainName, rowOrder: r.rowOrder, markers: r.markers, lockedRows: r.lockedRows, hiddenRows: r.hiddenRows, aspect: r.aspect })
+      dispatch({ type: 'loadProject', media: r.media, clips: r.clips, audioClips: r.audioClips, audioTracks: r.audioTracks, streamSettings: r.streamSettings, transcripts: r.transcripts, overlayClips: r.overlayClips, videoTracks: r.videoTracks, mainName: r.mainName, rowOrder: r.rowOrder, markers: r.markers, lockedRows: r.lockedRows, hiddenRows: r.hiddenRows, aspect: r.aspect, rowH: r.rowH, mark: r.mark })
       setProjectPath(file)
       // a project opened from a file starts "clean"; one restored from autosave still needs saving
-      savedJson.current = file ? serialize(r) : serialize(initialState)
+      savedJson.current = file || (initial && initial.nestOf) ? serialize(r) : serialize(initialState)
       autosavedJson.current = ''
       extractPending(r.pending)
       if (file) rememberRecent(file, r)
       if (r.missing.length) flash(`Some files could not be found: ${r.missing.join(', ')}`)
-      else flash(file ? 'Project opened.' : 'Previous session restored.')
+      else flash(file ? 'Project opened.' : initial && initial.nestOf ? 'Inside the nest. Change what you like, then press Update the nest.' : 'Previous session restored.')
     } catch (e) {
       window.alert('Could not open that project:\n' + (e.message || e))
     } finally {
@@ -231,7 +268,7 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
     setBusy(true)
     try {
       const r = await restore(json)
-      dispatch({ type: 'loadProject', media: r.media, clips: r.clips, audioClips: r.audioClips, audioTracks: r.audioTracks, streamSettings: r.streamSettings, transcripts: r.transcripts, overlayClips: r.overlayClips, videoTracks: r.videoTracks, mainName: r.mainName, rowOrder: r.rowOrder, markers: r.markers, lockedRows: r.lockedRows, hiddenRows: r.hiddenRows, aspect: r.aspect })
+      dispatch({ type: 'loadProject', media: r.media, clips: r.clips, audioClips: r.audioClips, audioTracks: r.audioTracks, streamSettings: r.streamSettings, transcripts: r.transcripts, overlayClips: r.overlayClips, videoTracks: r.videoTracks, mainName: r.mainName, rowOrder: r.rowOrder, markers: r.markers, lockedRows: r.lockedRows, hiddenRows: r.hiddenRows, aspect: r.aspect, rowH: r.rowH, mark: r.mark })
       extractPending(r.pending)
       setShowHistory(false)
       flash('Older version restored. Save to keep it.')
@@ -243,6 +280,7 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
   }
 
   const saveProject = async (asNew, to) => {
+    if (nestOf && !asNew && !to) return updateThisNest()
     const s = stateRef.current
     const json = serialize(s)
     const file = await window.api.saveProject(to || (asNew ? null : projectRef.current), json, `${projectName === 'Untitled' ? 'My project' : projectName}.json`)
@@ -271,7 +309,7 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
 
   // tell the tab bar about the project's name and whether it has unsaved changes
   useEffect(() => {
-    onMeta(tabId, { title: projectName, path: projectPath, dirty })
+    onMeta(tabId, { title: nestOf && !projectPath ? (nestOf.name || 'Nest') + ' (inside)' : projectName, path: projectPath, dirty })
   }, [projectName, projectPath, dirty])
 
   // work out whether there are unsaved changes
@@ -304,7 +342,8 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
       const tag = e.target.tagName
       // sliders, colour boxes and tick boxes keep the focus after a click: shortcuts must still work then
       const typing = tag === 'TEXTAREA' || tag === 'SELECT' || (tag === 'INPUT' && !['range', 'checkbox', 'color', 'radio', 'button'].includes(e.target.type))
-      if (showKeys || typing) return
+      if (showKeys || showSource || typing) return
+      if (e.key && e.key.toLowerCase() === 'k' && !e.ctrlKey && !e.altKey) kDown.current = true
       const action = actionFor(binds, e)
       if (!action) return
       e.preventDefault()
@@ -322,8 +361,30 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
         snap: () => setSnapOn(!snapOn),
         ripple: () => setRippleOn(!rippleOn),
         fit: () => fitRef.current && fitRef.current(),
+        toolSelect: () => setTool('select'),
+        toolRipple: () => setTool('ripple'),
+        toolRoll: () => setTool('roll'),
+        toolSlip: () => setTool('slip'),
+        toolSlide: () => setTool('slide'),
+        shuttleBack: () => (kDown.current ? stepFrame(-1) : dispatch({ type: 'shuttle', dir: -1 })),
+        shuttleStop: () => dispatch({ type: 'shuttle', dir: 0 }),
+        shuttleForward: () => (kDown.current ? stepFrame(1) : dispatch({ type: 'shuttle', dir: 1 })),
+        markIn: () => dispatch({ type: 'setMark', which: 'in', t: stateRef.current.playhead }),
+        markOut: () => dispatch({ type: 'setMark', which: 'out', t: stateRef.current.playhead }),
+        goIn: () => stateRef.current.mark.in != null && dispatch({ type: 'setPlayhead', t: stateRef.current.mark.in, user: true }),
+        goOut: () => stateRef.current.mark.out != null && dispatch({ type: 'setPlayhead', t: stateRef.current.mark.out, user: true }),
+        clearMarks: () => dispatch({ type: 'clearMarks' }),
+        playInOut: () => playInOut(),
+        lift: () => cutMarked(false),
+        extract: () => cutMarked(true),
+        videoTaller: () => dispatch({ type: 'growRows', kind: 'video', by: 12 }),
+        videoShorter: () => dispatch({ type: 'growRows', kind: 'video', by: -12 }),
+        audioTaller: () => dispatch({ type: 'growRows', kind: 'audio', by: 12 }),
+        audioShorter: () => dispatch({ type: 'growRows', kind: 'audio', by: -12 }),
+        exportSel: () => stateRef.current.selection.length && onExport('selected'),
         group: () => dispatch({ type: 'group' }),
         ungroup: () => dispatch({ type: 'ungroup' }),
+        nest: () => doNest(),
         save: () => saveProject(false),
         saveAs: () => saveProject(true),
         open: onOpen,
@@ -337,7 +398,41 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [state.playing, state.playhead, total, binds, showKeys, snapOn, rippleOn])
+  }, [state.playing, state.playhead, total, binds, showKeys, showSource, snapOn, rippleOn])
+  // K held down: J and L step one frame instead of playing
+  const kDown = useRef(false)
+  useEffect(() => {
+    const up = (e) => {
+      if (e.key && e.key.toLowerCase() === 'k') kDown.current = false
+    }
+    const blur = () => (kDown.current = false)
+    window.addEventListener('keyup', up)
+    window.addEventListener('blur', blur)
+    return () => {
+      window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', blur)
+    }
+  }, [])
+  const stepFrame = (dir) => {
+    const st = stateRef.current
+    dispatch({ type: 'setPlaying', value: false })
+    dispatch({ type: 'setPlayhead', t: Math.max(0, Math.min(projectDuration(st), st.playhead + dir / 30)), user: true })
+  }
+  const playInOut = () => {
+    const r = markRange(stateRef.current)
+    if (!r) return flash('Mark an In and an Out first: I and O at the playhead, or the buttons under the preview.')
+    dispatch({ type: 'setPlayhead', t: r[0], user: true })
+    dispatch({ type: 'setPlaying', value: true, until: r[1] })
+  }
+  // lift (leave the space empty) or extract (close it): what lies between the In and Out marks, on every track
+  const cutMarked = (close) => {
+    const st = stateRef.current
+    const r = markRange(st)
+    if (!r || st.mark.in == null || st.mark.out == null) return flash('Mark an In and an Out first (I and O at the playhead).')
+    dispatch(close ? { type: 'rippleDelete', ranges: [r] } : { type: 'lift', t0: r[0], t1: r[1] })
+    dispatch({ type: 'clearMarks' })
+    dispatch({ type: 'setPlayhead', t: r[0], user: true })
+  }
 
   const doCopy = () => {
     const n = copySelection(stateRef.current)
@@ -428,6 +523,9 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
     restoreJson,
     historyKey,
     reloadTransitions: loadTransitions,
+    openNest,
+    updateNest: updateThisNest,
+    isNest: !!nestOf && !projectPath,
   }
 
   // take a file out of this project (the file itself on the computer is not touched)
@@ -542,7 +640,10 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
           <button onClick={() => saveProject(true)}>Save as…</button>
           <button onClick={() => setShowHistory(true)} title="Version history: earlier copies of this project"><Icon name="history" size={14} /></button>
         </span>
-        <span className="proj-name">{projectName}{dirty ? ' •' : ''}</span>
+        <span className="proj-name">{nestOf && !projectPath ? (nestOf.name || 'Nest') + ' (inside)' : projectName}{dirty ? ' •' : ''}</span>
+        {nestOf && !projectPath && (
+          <button className="primary nest-update" onClick={updateThisNest} title="Render this again and put it back into the project the nest is in (Ctrl+S)"><Icon name="nest" size={14} /> Update the nest</button>
+        )}
         <select className="aspect-select" value={state.aspect} onChange={(e) => dispatch({ type: 'setAspect', aspect: e.target.value })} title="The shape of your video: landscape, vertical (phones), square and more">
           {ASPECTS.map((x) => (
             <option key={x.id} value={x.id}>{x.label}</option>
@@ -592,10 +693,12 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
                   <span className="badge">{m.type}</span>
                 </div>
                 <button className="bin-x" title="Remove from this project" onClick={(e) => { e.stopPropagation(); removeMedia(m) }}>×</button>
+                {m.type !== 'image' && !m.missing && <button className="bin-trim" title="Watch it and mark the part to use (In and Out) before you add it" onClick={(e) => { e.stopPropagation(); setShowSource(m.id) }}><Icon name="trimSource" size={13} /></button>}
                 <div className="meta">
                   <div className="name">{m.name}</div>
                   <div className="sub">
                     {m.type !== 'image' ? fmtTime(m.duration).slice(0, 5) : ''}
+                    {m.mark ? ` · uses ${fmtTime(sourceRange(m)[0]).slice(0, 5)}–${fmtTime(sourceRange(m)[1]).slice(0, 5)}` : ''}
                     {m.type === 'video' || m.type === 'image' ? ` · ${m.width}×${m.height}` : ''}
                     {m.type === 'video' && m.audioStreams.length ? ` · ${m.audioStreams.length} audio` : ''}
                     {m.audioPending ? ' · preparing audio…' : ''}
@@ -623,9 +726,12 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
           <Preview state={state} dispatch={dispatch} transitions={transitions} onCompiled={setTrErrors} active={active} mode={mode} setMode={setMode} freeMode={freeMode} />
           <div className="transport">
             <button onClick={() => dispatch({ type: 'setPlayhead', t: 0, user: true })} title="Go to start"><Icon name="skipBack" fill /></button>
+            <button className={state.mark.in != null ? 'on' : ''} onClick={() => dispatch({ type: 'setMark', which: 'in', t: state.playhead })} onContextMenu={(e) => { e.preventDefault(); dispatch({ type: 'setMark', which: 'in', t: null }) }} title={'Mark In at the playhead (' + binds.markIn + '). Right-click removes it.'}><Icon name="markIn" /></button>
+            <button className={state.mark.out != null ? 'on' : ''} onClick={() => dispatch({ type: 'setMark', which: 'out', t: state.playhead })} onContextMenu={(e) => { e.preventDefault(); dispatch({ type: 'setMark', which: 'out', t: null }) }} title={'Mark Out at the playhead (' + binds.markOut + '). Right-click removes it.'}><Icon name="markOut" /></button>
             <button className="primary play" onClick={() => dispatch({ type: 'setPlaying', value: !state.playing })}>
               {state.playing ? <><Icon name="pause" fill /> Pause</> : <><Icon name="play" fill /> Play</>}
             </button>
+            <button disabled={!markRange(state)} onClick={playInOut} title={'Play from the In mark to the Out mark (' + binds.playInOut + ')'}><Icon name="playInOut" /></button>
             <span className="timecode">
               {fmtTime(state.playhead)} / {fmtTime(total)}
             </span>
@@ -647,18 +753,32 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
           open={inspOpen}
           setOpen={setInspOpen}
           onOpenColour={onOpenColour}
+          onOpenNest={openNest}
         />
       </div>
 
       <div className="tl-split" onPointerDown={startResize} onDoubleClick={() => setTlHeight(340)} title="Drag up or down to make the timeline bigger or smaller (double-click to reset)" />
+      <div className="tl-wrap" style={{ height: tlHeight }}>
       <Timeline
         onCaptions={() => setShowCaptions(true)}
         height={tlHeight}
+        onLift={() => cutMarked(false)}
+        onNest={doNest}
+        nestKey={binds.nest}
+        onOpenNest={openNest}
+        tool={tool}
+        setTool={setTool}
+        toolKeys={binds}
+        onExtract={() => cutMarked(true)}
+        liftKeys={[binds.lift, binds.extract]}
         state={state}
         dispatch={dispatch}
         zoom={zoom}
         setZoom={setZoom}
         splitKey={binds.split}
+        onExportSel={() => onExport('selected')}
+        exportSelKey={binds.exportSel}
+        heightKeys={[binds.videoTaller, binds.videoShorter, binds.audioTaller, binds.audioShorter]}
         freezeKey={binds.freeze}
         groupKey={binds.group}
         ungroupKey={binds.ungroup}
@@ -675,6 +795,9 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
         setMiniOn={setMiniOn}
         onKeybinds={() => setShowKeys(true)}
       />
+      <Meter playing={state.playing} />
+      </div>
+      {showSource && <SourceDialog media={state.media.find((m) => m.id === showSource) || null} onClose={() => setShowSource(null)} onSave={(mark) => dispatch({ type: 'setSourceMark', id: showSource, mark })} onAdd={(mark) => { dispatch({ type: 'setSourceMark', id: showSource, mark }); const m = state.media.find((x) => x.id === showSource); setShowSource(null); if (m) setTimeout(() => addMediaToTimeline(m), 0) }} />}
       {showHistory && <HistoryDialog projectKey={historyKey()} onClose={() => setShowHistory(false)} onRestore={restoreJson} onOpenNew={(json) => {
         setShowHistory(false)
         onOpenJson(json)

@@ -120,9 +120,11 @@ export default function App() {
     window.__openPicture = (pic) => newTab({ picture: pic }, 'image')
   })
   // each project can have an Export tab next to it (settings, and the video as it is being made)
-  const openExport = (projectId) => {
+  // part = 'selected' to start with only the selected clips (the Export selected clips button)
+  const openExport = (projectId, part) => {
     const id = 'x' + projectId
-    setExports((e) => (e.some((x) => x.id === id) ? e : [...e, { id, projectId, running: false, pct: 0, done: false }]))
+    const ask = part ? { kind: part, n: Date.now() } : null
+    setExports((e) => (e.some((x) => x.id === id) ? (ask ? e.map((x) => (x.id === id ? { ...x, ask } : x)) : e) : [...e, { id, projectId, running: false, pct: 0, done: false, ask }]))
     setActiveId(id)
   }
   // a Colour tab for one clip of a project (colour correction with an Apply button)
@@ -429,9 +431,10 @@ export default function App() {
               onMeta={onMeta}
               onNew={() => setChooser(true)}
               onOpen={openDialog}
-              onExport={() => openExport(t.id)}
+              onExport={(part) => openExport(t.id, part)}
               onOpenColour={(clipId) => openColour(t.id, clipId)}
-              onOpenJson={(json) => newTab({ file: null, json })}
+              onOpenJson={(json, nestOf) => newTab({ file: null, json, nestOf: nestOf ? { ...nestOf, tabId: t.id } : null })}
+              outerHandle={t.initial && t.initial.nestOf ? () => handles.current[t.initial.nestOf.tabId] : null}
               registerHandle={registerHandle}
             />
           ),
@@ -450,6 +453,7 @@ export default function App() {
           <ExportTab
             key={x.id}
             active={activeId === x.id}
+            ask={x.ask}
             getProject={() => {
               const h = handles.current[x.projectId]
               const pt = tabs.find((t) => t.id === x.projectId)

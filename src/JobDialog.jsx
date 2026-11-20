@@ -9,7 +9,7 @@ export default function JobDialog() {
     <div className="modal-bg top">
       <div className="modal update-modal">
         <h3>{job.title}</h3>
-        <p className="upd-text">An AI app asked for this. {job.text}</p>
+        <p className="upd-text">{job.byPerson ? '' : 'An AI app asked for this. '}{job.text}</p>
         <div className="bar"><div className="bar-fill" style={{ width: `${(100 * job.done) / Math.max(1, job.total)}%` }} /></div>
         <div className="modal-foot">
           <span />

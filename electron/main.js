@@ -12,6 +12,7 @@ const ffprobePath = unpack(require('ffprobe-static').path)
 // Recordings whose index is at the end open slowly in the preview: it gets them through vibe-media:// with the index first
 // (see fastIndex.js). The scheme has to be known before the app is ready.
 const fastIndex = require('./fastIndex.js')
+const stabilizer = require('./stabilize.js')
 protocol.registerSchemesAsPrivileged([{ scheme: 'vibe-media', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, corsEnabled: true } }])
 app.whenReady().then(() => protocol.handle('vibe-media', fastIndex.serve))
 ipcMain.on('media:indexAtEnd', (e, file) => (e.returnValue = fastIndex.needsIt(String(file))))
@@ -63,6 +64,8 @@ async function probe(file) {
     width: video ? video.width : 0,
     height: video ? video.height : 0,
     codec: video ? video.codec_name : '',
+    // frames per second (a nest is made at the rate of its fastest video)
+    fps: video && !isImage ? (([n, d]) => (+d > 0 ? Math.round((+n / +d) * 100) / 100 : 0))(String(video.avg_frame_rate || video.r_frame_rate || '0/1').split('/')) : 0,
     bitrate: parseInt(info.format.bit_rate, 10) || 0,
     audioStreams: audio.map((s, i) => ({
       index: s.index,
@@ -513,6 +516,69 @@ ipcMain.handle('transitions:write', (_e, { name, source }) => {
   if (!safe) throw new Error('That name cannot be used.')
   fs.writeFileSync(path.join(transitionsDir(), safe + '.glsl'), String(source), 'utf8')
   return safe
+})
+
+// ---- Stabilise: steadied copies of clips (see stabilize.js), in userData/stab ----
+stabilizer.setup({
+  ffmpegPath,
+  dir: () => {
+    const d = path.join(app.getPath('userData'), 'stab')
+    fs.mkdirSync(d, { recursive: true })
+    return d
+  },
+  send: (p) => mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents.send('stab:progress', p),
+})
+ipcMain.handle('media:stabilize', (_e, o) => stabilizer.stabilize(o))
+// a new file name for a rendered nest (userData/nests)
+ipcMain.handle('nest:path', () => {
+  const d = path.join(app.getPath('userData'), 'nests')
+  fs.mkdirSync(d, { recursive: true })
+  return path.join(d, 'nest-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7) + '.mp4')
+})
+
+// ---- LUTs (.cube colour looks): copied into userData/luts; clips refer to them by file name ----
+const lutsDir = () => {
+  const d = path.join(app.getPath('userData'), 'luts')
+  fs.mkdirSync(d, { recursive: true })
+  return d
+}
+const lutName = (f) => {
+  const base = path.basename(String(f))
+  if (!/\.cube$/i.test(base) || base.includes('..')) throw new Error('That is not a .cube file.')
+  return base
+}
+ipcMain.handle('luts:list', () => {
+  try {
+    return fs.readdirSync(lutsDir()).filter((f) => /\.cube$/i.test(f)).sort((a, b) => a.localeCompare(b)).map((f) => ({ file: f, name: path.basename(f, path.extname(f)) }))
+  } catch {
+    return []
+  }
+})
+ipcMain.handle('luts:read', (_e, file) => {
+  const p = path.join(lutsDir(), lutName(file))
+  if (fs.statSync(p).size > 64 * 1024 * 1024) throw new Error('This LUT file is too big.')
+  return fs.readFileSync(p, 'utf8')
+})
+// paths given (the AI connection) or picked in a window; returns the names they have in the folder
+ipcMain.handle('luts:import', async (_e, paths) => {
+  let list = Array.isArray(paths) ? paths.map(String) : null
+  if (!list) {
+    const r = await dialog.showOpenDialog(mainWindow, { title: 'Add LUTs (.cube)', properties: ['openFile', 'multiSelections'], filters: [{ name: 'LUT', extensions: ['cube'] }] })
+    if (r.canceled) return []
+    list = r.filePaths
+  }
+  const out = []
+  for (const p of list) {
+    const name = lutName(p)
+    fs.copyFileSync(p, path.join(lutsDir(), name))
+    out.push(name)
+  }
+  return out
+})
+ipcMain.handle('luts:folder', () => shell.openPath(lutsDir()))
+ipcMain.handle('luts:remove', (_e, file) => {
+  fs.rmSync(path.join(lutsDir(), lutName(file)), { force: true })
+  return true
 })
 
 let mainWindow = null
@@ -1193,6 +1259,9 @@ if (process.env.VIBE_SELFTEST) {
   app.commandLine.appendSwitch('disable-renderer-backgrounding')
   app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
   app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
+  // with the screen off or locked Windows stops the display's beat and pages fall to 1 frame a second: use a timer instead
+  app.commandLine.appendSwitch('disable-gpu-vsync')
+  app.commandLine.appendSwitch('disable-frame-rate-limit')
   app.commandLine.appendSwitch('use-fake-device-for-media-stream')
   app.commandLine.appendSwitch('use-fake-ui-for-media-stream')
 }
@@ -1273,6 +1342,9 @@ function runSelfTest(win) {
     const steps = await win.webContents.executeJavaScript(`(async()=>{ ${script} })()`)
     for (const s of steps || []) {
       if (s.wait) await new Promise((r) => setTimeout(r, s.wait))
+      // a real key press, as Windows would send it (menus and page zoom see it too)
+      // (only: 'down' holds it, 'up' lets go)
+      if (s.key) for (const type of s.only === 'down' ? ['keyDown', 'char'] : s.only === 'up' ? ['keyUp'] : ['keyDown', 'char', 'keyUp']) win.webContents.sendInputEvent({ type, keyCode: s.key, modifiers: s.mods || [] })
       if (s.js) console.log('JS:', JSON.stringify(await win.webContents.executeJavaScript(s.js)))
       if (s.save) {
         const url = await win.webContents.executeJavaScript(s.dataUrl)

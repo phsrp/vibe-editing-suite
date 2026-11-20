@@ -66,6 +66,13 @@ contextBridge.exposeInMainWorld('api', {
   audioPeaks: (file) => ipcRenderer.invoke('media:peaks', file),
   openProjectsFolder: () => ipcRenderer.invoke('projects:folder'),
   reverseProxy: (o) => ipcRenderer.invoke('media:reverse', o),
+  stabilize: (o) => ipcRenderer.invoke('media:stabilize', o),
+  nestPath: () => ipcRenderer.invoke('nest:path'),
+  onStabProgress: (cb) => {
+    const h = (_e, p) => cb(p)
+    ipcRenderer.on('stab:progress', h)
+    return () => ipcRenderer.removeListener('stab:progress', h)
+  },
   measureLoudness: (o) => ipcRenderer.invoke('audio:loudness', o),
   modelsStatus: () => ipcRenderer.invoke('models:status'),
   modelsDownload: (set) => ipcRenderer.invoke('models:download', set),
@@ -81,6 +88,11 @@ contextBridge.exposeInMainWorld('api', {
   openVoiceFolder: () => ipcRenderer.invoke('voice:folder'),
   libraryFolder: () => ipcRenderer.invoke('library:folder'),
   libraryList: () => ipcRenderer.invoke('library:list'),
+  listLuts: () => ipcRenderer.invoke('luts:list'),
+  readLut: (file) => ipcRenderer.invoke('luts:read', file),
+  importLuts: (paths) => ipcRenderer.invoke('luts:import', paths),
+  lutsFolder: () => ipcRenderer.invoke('luts:folder'),
+  removeLut: (file) => ipcRenderer.invoke('luts:remove', file),
   libraryAdd: () => ipcRenderer.invoke('library:add'),
   saveImage: (o) => ipcRenderer.invoke('image:save', o),
   saveThumb: (o) => ipcRenderer.invoke('thumb:save', o),

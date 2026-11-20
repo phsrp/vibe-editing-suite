@@ -3,6 +3,8 @@ import Icon from './Icon.jsx'
 import { createRenderer } from './glRenderer.js'
 import { layout, overlayLayout, srcAt, toUrl, fmtTime, aspectRatio, previewSize, setVideoSrc } from './state.js'
 import { CC_SLIDERS, CC_DEFAULTS, CC_PRESETS } from './effects.js'
+import LutPicker from './LutPicker.jsx'
+import { onLutLoaded } from './luts.js'
 
 // The Colour tab: colour correction for one clip. You see the picture change here as you move the sliders,
 // but the clip in the editor (and the export) only changes when you press Apply.
@@ -12,6 +14,10 @@ export default function ColourTab({ active, getProject, clipId, dispatchProject,
   const media = clip && project.state.media.find((m) => m.id === clip.mediaId)
   const applied = { ...CC_DEFAULTS, ...((clip && clip.fx && clip.fx.cc) || {}) }
   const [draft, setDraft] = useState(applied)
+  const appliedLut = (clip && clip.fx && clip.fx.lut) || null
+  const [lut, setLut] = useState(appliedLut) // the LUT (colour look) being tried
+  const lutRef = useRef(lut)
+  lutRef.current = lut
   const [compare, setCompare] = useState(false)
   const [srcTime, setSrcTime] = useState(() => (clip ? srcAt(clip, project.state.playhead) : 0))
   const canvasRef = useRef(null)
@@ -24,7 +30,7 @@ export default function ColourTab({ active, getProject, clipId, dispatchProject,
     if (active) setProject(getProject())
   }, [active])
 
-  const dirty = CC_SLIDERS.some((s) => draft[s.id] !== applied[s.id])
+  const dirty = CC_SLIDERS.some((s) => draft[s.id] !== applied[s.id]) || JSON.stringify(lut || null) !== JSON.stringify(appliedLut)
   const set = (patch) => setDraft((d) => ({ ...d, ...patch }))
 
   // the picture: a video / image element for the clip, drawn by the same renderer the preview and export use
@@ -38,7 +44,7 @@ export default function ColourTab({ active, getProject, clipId, dispatchProject,
       const w = el.videoWidth || el.naturalWidth
       const h = el.videoHeight || el.naturalHeight
       if (!w) return
-      r.render({ el, w, h, tf: null, fx: { cc: compare ? undefined : draftRef.current } })
+      r.render({ el, w, h, tf: null, fx: compare ? {} : { cc: draftRef.current, lut: lutRef.current || undefined } })
     }
     drawRef.current = draw
     if (media.type === 'video') {
@@ -77,7 +83,9 @@ export default function ColourTab({ active, getProject, clipId, dispatchProject,
     // draw straight away for sliders (the frame is already loaded)
     const draw = drawRef.current
     draw()
-  }, [draft, compare, srcTime])
+  }, [draft, lut, compare, srcTime])
+  // a LUT file that was still loading: draw again once it is there
+  useEffect(() => onLutLoaded(() => drawRef.current()), [])
 
   if (!clip || !media) {
     return (
@@ -90,8 +98,7 @@ export default function ColourTab({ active, getProject, clipId, dispatchProject,
 
   const apply = () => {
     const same = CC_SLIDERS.every((s) => draft[s.id] === CC_DEFAULTS[s.id])
-    if (same) dispatchProject({ type: 'resetFx', id: clipId, only: 'cc' })
-    else dispatchProject({ type: 'setFx', id: clipId, patch: { cc: draft } })
+    dispatchProject({ type: 'setFx', id: clipId, patch: { cc: same ? null : draft, lut: lut || null } })
     setProject(getProject())
   }
   const close = () => {
@@ -111,6 +118,10 @@ export default function ColourTab({ active, getProject, clipId, dispatchProject,
             <button key={p.name} className="mini wide" onClick={() => setDraft({ ...CC_DEFAULTS, ...p.cc })}>{p.name}</button>
           ))}
         </div>
+        <div className="mrow">
+          <div className="mtop"><span className="mlabel">Look (LUT)</span></div>
+          <LutPicker value={lut} onChange={setLut} />
+        </div>
         {CC_SLIDERS.map((s) => (
           <div className="mrow" key={s.id}>
             <div className="mtop">
@@ -125,7 +136,7 @@ export default function ColourTab({ active, getProject, clipId, dispatchProject,
         ))}
         <div className="export-actions">
           <button className="primary big" disabled={!dirty} onClick={apply}>Apply to the clip</button>
-          <button className="big" onClick={() => setDraft({ ...CC_DEFAULTS })}>Reset all</button>
+          <button className="big" onClick={() => (setDraft({ ...CC_DEFAULTS }), setLut(null))}>Reset all</button>
         </div>
         <div className="export-actions">
           <button onClick={() => {

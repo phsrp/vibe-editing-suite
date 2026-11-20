@@ -20,9 +20,9 @@ export function cancelJob() {
 }
 
 // run({progress(done, total, text), cancelled(), onCancel(fn)}) does the work; what it returns is the result the AI app is told
-export function startJob({ title, text = '', seconds, cancellable = true }, run) {
+export function startJob({ title, text = '', seconds, cancellable = true, byPerson = false }, run) {
   job = null
-  update({ state: 'running', title, text, done: 0, total: 0, seconds, cancellable, cancelled: false, onCancel: null })
+  update({ state: 'running', title, text, done: 0, total: 0, seconds, cancellable, cancelled: false, onCancel: null, byPerson })
   const tools = {
     progress: (done, total, t) => update({ done, total, text: t == null ? job.text : t }),
     cancelled: () => job.cancelled,

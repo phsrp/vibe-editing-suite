@@ -3,6 +3,8 @@ import { drawText, loadFont } from './textRender.js'
 import { aspectRatio } from './state.js'
 import { speedOf, srcAt, tlOf, layout, overlayLayout, totalDuration, projectDuration, videoRowsBottomUp, hasAttached, streamCount, toUrl, streamAudioOf, audioClipVol, cleanActive } from './state.js'
 import { createRenderer } from './glRenderer.js'
+import { ensureLuts } from './luts.js'
+import { stabForExport, stabStrength } from './stabilize.js'
 import { evalTransform, evalWarp, hasTransform, keyTimes, PROPS } from './motion.js'
 import { maskAt } from './masks.js'
 import DecodeWorker from './exportDecode.worker.js?worker&inline'
@@ -96,6 +98,8 @@ export function buildPlan(state, s) {
     const rel = (u0 - c.start) * sp
     const isImage = m.type === 'image'
     if (c.reverse && !isImage) return { file: null, proxy: { file: m.path, from: c.in, to: c.out }, isImage, start: rel, speed: sp, tl0: u0, clip: c }
+    // a stabilised clip: its steadied copy (made before the export starts); start is moved to that copy's own time below
+    if (c.stab && !isImage) return { file: null, stab: { file: m.path, from: c.in, to: c.out, strength: stabStrength(c) }, isImage, start: c.in + rel, speed: sp, tl0: u0, clip: c }
     return { file: m.path, isImage, start: c.in + rel, speed: sp, tl0: u0, clip: c }
   }
 
@@ -156,7 +160,7 @@ export function buildPlan(state, s) {
     }
     if (r.kind === 'clip' && !over.length) {
       const sd = sideFor(r.clip, u0, u1)
-      segments.push({ kind: 'clip', file: sd.file, proxy: sd.proxy, isImage: sd.isImage, srcStart: sd.start, srcDur: dur * sd.speed, speed: sd.speed, frames })
+      segments.push({ kind: 'clip', file: sd.file, proxy: sd.proxy, stab: sd.stab, isImage: sd.isImage, srcStart: sd.start, srcDur: dur * sd.speed, speed: sd.speed, frames })
       continue
     }
     // layers, bottom first (the order of the rows on the timeline)
@@ -243,6 +247,7 @@ const pad5 = (n) => String(n).padStart(5, '0')
 export async function runExport({ state, settings, transitions, outPath, onProgress, onPreview, onPreviewUrl, onCheck }) {
   cancelled = false
   exporting = true
+  await ensureLuts(state)
   const plan = buildPlan(state, settings)
   plan.out = outPath
   const { w, h, fps } = plan
@@ -264,6 +269,16 @@ export async function runExport({ state, settings, transitions, outPath, onProgr
     for (const s of plan.segments) {
       if (s.kind === 'clip') todo.push(s)
       else if (s.kind === 'gl') for (const l of s.layers) todo.push(l.a, ...(l.b ? [l.b] : []))
+    }
+    // stabilised clips: their full-quality steadied copies
+    const needStab = todo.filter((x) => x.stab && !x.file)
+    for (let pi = 0; pi < needStab.length; pi++) {
+      if (cancelled) throw new Error('Export cancelled')
+      report(`Steadying shaky clips ${pi + 1} of ${needStab.length} (this can take a while)`)
+      const r = await stabForExport(needStab[pi].stab.file, needStab[pi].stab.from, needStab[pi].stab.to, needStab[pi].stab.strength)
+      needStab[pi].file = r.path
+      if ('srcStart' in needStab[pi]) needStab[pi].srcStart -= r.from
+      else needStab[pi].start -= r.from
     }
     const needProxy = todo.filter((x) => x.proxy && !x.file)
     for (let pi = 0; pi < needProxy.length; pi++) {

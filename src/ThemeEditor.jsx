@@ -67,10 +67,13 @@ export function ThemeSample({ theme, kind = 'video' }) {
           </div>
         )}
       </div>
-      <div className="ts-timeline">
+      <div className={'ts-timeline' + (kind === 'video' ? ' has-meter' : '')}>
         {kind === 'video' ? (
           <>
+            {/* the sound level meters beside the timeline */}
+            <div className="ts-meter"><i style={{ height: '64%' }} /><i style={{ height: '52%' }} /></div>
             <div className="ts-lane">
+              <span className="ts-io" style={{ left: '40%', width: '26%' }} />
               <span className="ts-clip video" style={{ left: '2%', width: '34%' }}>beach.mp4</span>
               <span className="ts-clip image" style={{ left: '37%', width: '14%' }}>logo.png</span>
               <span className="ts-clip video sel" style={{ left: '52%', width: '30%' }}>selected</span>

@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import LutPicker from './LutPicker.jsx'
+import { onStab, stabState, STAB_DEFAULT } from './stabilize.js'
 import { layout, overlayLayout, soleVideoClip, srcAt, tlOf, speedOf, fmtDur, aspectRatio, streamAudioOf, audioClipVol, cleanActive, hasAttached, envAt } from './state.js'
 import Icon from './Icon.jsx'
 import { PROPS, evalProp, keyAt, KEY_EPS } from './motion.js'
@@ -44,6 +46,36 @@ function SpeedPanel({ clip, dispatch }) {
       <div className="hint left">
         Lasts {fmtDur(clip.dur)} on the timeline. {clip.reverse ? 'A reversed clip takes a moment to prepare for the preview and is silent there; the export has its reversed sound. ' : ''}Speed changes the sound's speed too, and keeps its pitch.
       </div>
+    </Section>
+  )
+}
+
+// Stabilise: remove camera shake. A steadied copy is made in the background (it takes a while for long clips).
+function StabilizePanel({ clip, media, dispatch }) {
+  const [, tick] = useState(0)
+  useEffect(() => onStab(() => tick((n) => n + 1)), [])
+  const on = !!clip.stab
+  const st = stabState(clip, media)
+  const strength = clip.stab ? clip.stab.strength ?? STAB_DEFAULT : STAB_DEFAULT
+  return (
+    <Section id="stab" title="Stabilise" dot={on} defaultOpen={false}>
+      <label className="chk" title={clip.reverse ? 'A reversed clip cannot be stabilised' : 'Smooth out camera shake'}>
+        <input type="checkbox" disabled={!!clip.reverse} checked={on} onChange={(e) => dispatch({ type: 'setStab', id: clip.id, stab: e.target.checked ? { strength } : null })} />
+        Steady the picture (remove camera shake)
+      </label>
+      {on && (
+        <>
+          <div className="mtop">
+            <span className="mlabel">Smoothness</span>
+            <span className="unit">{strength}</span>
+          </div>
+          <input type="range" min="0" max="100" defaultValue={strength} key={clip.id + ':' + strength} onPointerUp={(e) => dispatch({ type: 'setStab', id: clip.id, stab: { strength: +e.target.value } })} onKeyUp={(e) => dispatch({ type: 'setStab', id: clip.id, stab: { strength: +e.target.value } })} title="Low keeps some natural movement; high makes it look like the camera was on a tripod (and zooms in a bit more)" />
+          <div className="hint left">
+            {st && st.error ? <span className="warn">It did not work: {st.error}</span> : st && st.ready ? 'Ready. The picture is zoomed in a little so no empty edges show.' : `Steadying… ${Math.round((st && st.pct) || 0)}%. The preview shows the original until it is ready. Changing the smoothness or trimming the clip longer starts it again.`}
+          </div>
+        </>
+      )}
+      {clip.reverse && <div className="hint left">Turn off Reverse to stabilise this clip.</div>}
     </Section>
   )
 }
@@ -257,6 +289,7 @@ function FxSlider({ label, value, min, max, step = 1, onChange, onStart }) {
 
 // Blur, sharpen, vignette, glow and chroma key (green screen). Colour correction has its own tab.
 function EffectsPanel({ clip, dispatch, onOpenColour }) {
+  const setLut = (v, live) => dispatch({ type: 'setFx', id: clip.id, patch: { lut: v }, live })
   const fx = clip.fx || {}
   const key = { ...KEY_DEFAULTS, ...(fx.key || {}) }
   const start = () => dispatch({ type: 'checkpoint' })
@@ -283,6 +316,8 @@ function EffectsPanel({ clip, dispatch, onOpenColour }) {
           <div className="hint left">Put another clip on a track below this one to see it through the removed colour.</div>
         </>
       )}
+      <div className="mtop"><span className="mlabel">Look (LUT)</span></div>
+      <LutPicker value={fx.lut} onChange={(v) => setLut(v)} onStart={start} onLive={(v) => setLut(v, true)} />
       {any && <button className="mini wide" onClick={() => dispatch({ type: 'resetFx', id: clip.id, only: 'effects' })}>Reset effects</button>}
       {onOpenColour && (
         <button className="mini wide" onClick={() => onOpenColour(clip.id)} title="Open the Colour tab for this clip">
@@ -652,7 +687,7 @@ function AudioPanel({ state, dispatch, ids: idsProp, embedded }) {
     </>
   )
 }
-export default function Inspector({ state, dispatch, transitions, errors, onReload, onOpenFolder, mode, setMode, freeMode, setFreeMode, open = true, setOpen, onOpenColour }) {
+export default function Inspector({ state, dispatch, transitions, errors, onReload, onOpenFolder, mode, setMode, freeMode, setFreeMode, open = true, setOpen, onOpenColour, onOpenNest }) {
   const lay = layout(state.clips)
   const only = soleVideoClip(state)
   const idx = lay.findIndex((c) => c.id === only)
@@ -727,6 +762,12 @@ export default function Inspector({ state, dispatch, transitions, errors, onRelo
         {clip && (
           <>
             <div className="insp-clip">{clip.text ? 'Text' : media ? media.name : 'Clip'}</div>
+            {media && media.nest && onOpenNest && (
+              <div className="nest-box">
+                <span><Icon name="nest" size={13} /> {(() => { let n = 0; try { const j = JSON.parse(media.nest.json); n = (j.clips || []).length + (j.overlayClips || []).length } catch {} return n === 1 ? 'A nest of 1 clip.' : `A nest of ${n} clips.` })()}</span>
+                <button className="mini wide" onClick={() => onOpenNest(media.id)} title="Open what is inside in a tab of its own (or double-click the clip)">Open the nest</button>
+              </div>
+            )}
             <div className="insp-tabs" role="tablist">
               {tabs.map((t) => (
                 <button key={t.id} data-tab={t.id} role="tab" aria-selected={tab === t.id} className={tab === t.id ? 'on' : ''} title={t.tip} onClick={() => pickTab(t.id)}>
@@ -758,6 +799,7 @@ export default function Inspector({ state, dispatch, transitions, errors, onRelo
               <>
                 <MotionPanel clip={clip} playhead={state.playhead} dispatch={dispatch} mode={mode} setMode={setMode} freeMode={freeMode} setFreeMode={setFreeMode} fill={fillScale} />
                 {media && media.type === 'video' && <SpeedPanel clip={clip} dispatch={dispatch} />}
+                {media && media.type === 'video' && <StabilizePanel clip={clip} media={media} dispatch={dispatch} />}
                 {oclip && <div className="hint left">Drag this clip along its track to choose when it appears. Transitions only work on {state.mainName}.</div>}
                 <LabelRow state={state} dispatch={dispatch} />
               </>

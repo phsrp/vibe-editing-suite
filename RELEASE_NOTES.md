@@ -1,4 +1,13 @@
-- Long recordings open straight away: a 2-hour, 38 GB recording now shows in the preview in about 0.2 seconds (before: never), and jumping around it takes a few hundredths of a second
-- Export a part of your video: the whole video, the selected clips, or from one time to another (new "Part to export" in the Export tab)
-- A video that is still opening shows a message instead of a black preview
-- AI connection: export_video can export a part (from, to)
+- In and Out marks: press I and O (or the buttons under the preview) to mark a part, then play it (Ctrl+Shift+Space), lift it (;), extract it (') or export just that part
+- Mark the part of a file to use before adding it: the new trim button on a file in the Media panel opens a viewer with In and Out
+- J, K and L: play backwards and forwards, faster each press; hold K and tap J or L to step one frame
+- Trim tools like Premiere: ripple (B), roll (Shift+B), slip (Y) and slide (U), next to the timeline buttons; V goes back to normal
+- Sound level meters next to the timeline, with a red light when the sound gets too loud
+- Nesting: turn selected clips into one clip (Alt+N); double-click it to change what is inside, then Update the nest
+- LUTs: colour looks from .cube files, plus six built-in looks, in Effects and in the Colour tab
+- Stabilise: steady a shaky clip (Clip tab), made in the background
+- Taller or shorter tracks: drag the bottom edge of a track's name, the new Track height button, Alt + mouse wheel, or Ctrl+= / Ctrl+- and Alt+= / Alt+-
+- Cleaner waveforms
+- Export the selected clips straight from the timeline (Ctrl+E); clips that are apart are joined one after the other
+- Fixed: cutting time out of the video now also shortens an empty gap inside that time
+- AI connection: all of the above (11 new tools)

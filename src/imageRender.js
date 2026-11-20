@@ -1,6 +1,7 @@
 // Draws an image project (its layers, bottom to top) with the same WebGL renderer the video editor uses, so transform,
 // funny warp, effects and masks look the same. Used by the editing view and by the export.
 import { createRenderer, BLEND_IDS } from './glRenderer.js'
+import { ensureLuts } from './luts.js'
 import { videoRowsBottomUp, overlayLayout, toUrl } from './state.js'
 import { evalTransform, evalWarp } from './motion.js'
 import { maskAt } from './masks.js'
@@ -111,6 +112,7 @@ export function freeRenderer(canvas) {
 // type: 'image/png' | 'image/jpeg' | 'image/webp'
 export async function exportImage(state, { scale = 1, type = 'image/png', quality = 0.92 } = {}) {
   await imagesReady(state)
+  await ensureLuts(state)
   const w = Math.max(1, Math.round(state.canvas.w * scale))
   const h = Math.max(1, Math.round(state.canvas.h * scale))
   const cv = document.createElement('canvas')

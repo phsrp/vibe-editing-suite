@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import Icon from './Icon.jsx'
-import { projectDuration, sectionOf, layout, overlayLayout, audioLayout } from './state.js'
+import { projectDuration, piecesOf, clipPieces, markRange } from './state.js'
 import { RESOLUTIONS, DEFAULT_BITRATE, defaultSettings, runExport, cancelExport, isExporting, frameSize } from './exporter.js'
 
 const ENCODERS = [
@@ -57,17 +57,21 @@ const parseClock = (text) => {
   if (!parts.length || parts.length > 3 || parts.some((n) => !Number.isFinite(n) || n < 0)) return null
   return parts.reduce((a, n) => a * 60 + n, 0)
 }
-// the time the selected clips cover, or null
-function selectedSpan(st) {
-  const items = [...layout(st.clips), ...overlayLayout(st.overlayClips), ...audioLayout(st.audioClips)].filter((c) => st.selection.includes(c.id))
-  return items.length ? [Math.min(...items.map((c) => c.start)), Math.max(...items.map((c) => c.start + c.dur))] : null
+// the times the selected clips cover ([[from, to], ...], joined one after the other in the export), or null
+function selectedPieces(st) {
+  const p = clipPieces(st, st.selection)
+  return p.length ? p : null
 }
-// the part of the timeline to export ([from, to] in seconds), or null for all of it
+// the parts of the timeline to export ([[from, to], ...] in seconds), or null for all of it
 function partRange(part, st) {
-  if (part.kind === 'selected') return selectedSpan(st)
-  if (part.kind === 'custom') return [Math.max(0, part.from), Math.min(part.to, projectDuration(st))]
+  if (part.kind === 'selected') return selectedPieces(st)
+  if (part.kind === 'marks') return markRange(st) ? [markRange(st)] : null
+  if (part.kind === 'custom') return [[Math.max(0, part.from), Math.min(part.to, projectDuration(st))]]
   return null
 }
+const lengthOf = (pieces) => pieces.reduce((n, [a, b]) => n + Math.max(0, b - a), 0)
+// "0:02.0 to 0:05.0", or "3 pieces: 0:02.0 to 0:05.0, 0:09.0 to 0:12.0, ..."
+const piecesText = (pieces) => (pieces.length === 1 ? '' : pieces.length + ' pieces: ') + pieces.slice(0, 3).map(([a, b]) => `${clock(a)} to ${clock(b)}`).join(', ') + (pieces.length > 3 ? ', …' : '')
 function TimeBox({ value, onChange }) {
   return (
     <input
@@ -94,9 +98,13 @@ const fmtDur = (s) => {
 }
 
 // The Export tab of a project: settings on the left, and on the right the video as it is being made.
-export default function ExportTab({ active, getProject, onStatus }) {
+export default function ExportTab({ active, ask, getProject, onStatus }) {
   const [s, setS] = useState(load)
-  const [part, setPart] = useState({ kind: 'all', from: 0, to: 0 }) // which part of the timeline to export
+  const [part, setPart] = useState(() => ({ kind: (ask && ask.kind) || (markRange(getProject().state) ? 'marks' : 'all'), from: 0, to: 0 })) // which part of the timeline to export
+  // opened again with "Export selected clips": switch to that part (not while an export is running)
+  useEffect(() => {
+    if (ask && ask.kind) setPart((p) => ({ ...p, kind: ask.kind }))
+  }, [ask && ask.n])
   const [phase, setPhase] = useState('settings') // settings | running | done | error
   const [prog, setProg] = useState({ pct: 0, label: '' })
   const [eta, setEta] = useState(null)
@@ -138,10 +146,11 @@ export default function ExportTab({ active, getProject, onStatus }) {
 
   const state = project.state
   const total = projectDuration(state)
-  const selSpan = selectedSpan(state)
+  const selSpan = selectedPieces(state)
+  const markSpan = markRange(state)
   const range = partRange(part, state)
-  const rangeOk = !range || range[1] - range[0] >= 0.5
-  const duration = range ? Math.max(0, range[1] - range[0]) : total
+  const rangeOk = part.kind === 'marks' ? !!range && lengthOf(range) >= 0.5 : !range || (part.kind === 'custom' ? range[0][1] - range[0][0] >= 0.5 : lengthOf(range) >= 0.5)
+  const duration = range ? lengthOf(range) : total
   const [rw, rh] = frameSize(s.res, state)
   const audioOnly = s.outputKind === 'audio'
   const presetInfo = PRESET_LIST.find((p) => p.id === s.preset)
@@ -158,7 +167,7 @@ export default function ExportTab({ active, getProject, onStatus }) {
     const snap = getProject()
     setProject(snap)
     const r = partRange(part, snap.state)
-    if (r && r[1] - r[0] < 0.5) return
+    if (r && lengthOf(r) < 0.5) return
     const ext = s.outputKind === 'audio' ? s.audioFormat : s.container
     const file = await window.api.exportChooseOutput(`${snap.name || 'My video'}${r ? ' (part)' : ''}.${ext}`, ext)
     if (!file) return
@@ -173,7 +182,7 @@ export default function ExportTab({ active, getProject, onStatus }) {
     try {
       const transitions = await window.api.listTransitions()
       const result = await runExport({
-        state: r ? sectionOf(snap.state, r[0], r[1]) : snap.state,
+        state: r ? piecesOf(snap.state, r) : snap.state,
         settings: { ...s, encoder },
         transitions,
         outPath: file,
@@ -238,7 +247,8 @@ export default function ExportTab({ active, getProject, onStatus }) {
             }}
           >
             <option value="all">The whole video</option>
-            <option value="selected" disabled={!selSpan}>{selSpan ? `The selected clips (${clock(selSpan[0])} to ${clock(selSpan[1])})` : 'The selected clips (nothing is selected)'}</option>
+            <option value="selected" disabled={!selSpan}>{selSpan ? `The selected clips (${piecesText(selSpan)})` : 'The selected clips (nothing is selected)'}</option>
+            <option value="marks" disabled={!markSpan}>{markSpan ? `Between the In and Out marks (${piecesText([markSpan])})` : 'Between the In and Out marks (none set)'}</option>
             <option value="custom">From one time to another</option>
           </select>
           {part.kind === 'custom' && (
@@ -255,7 +265,8 @@ export default function ExportTab({ active, getProject, onStatus }) {
               </span>
             </>
           )}
-          {range && !rangeOk && <div className="hint warn" style={{ gridColumn: '1 / -1' }}>The part must be at least half a second long, and "To" must come after "From".</div>}
+          {range && !rangeOk && <div className="hint warn" style={{ gridColumn: '1 / -1' }}>{part.kind === 'custom' ? 'The part must be at least half a second long, and "To" must come after "From".' : part.kind === 'marks' ? 'The marked part must be at least half a second long.' : 'The selected clips must be at least half a second long together.'}</div>}
+          {part.kind === 'selected' && selSpan && selSpan.length > 1 && <div className="hint" style={{ gridColumn: '1 / -1' }}>The selected clips are joined one after the other; what lies between them is left out.</div>}
 
           <label>Make</label>
           <select disabled={running} value={s.outputKind || 'video'} onChange={(e) => set({ outputKind: e.target.value })}>
@@ -377,7 +388,7 @@ export default function ExportTab({ active, getProject, onStatus }) {
                 : 'No graphics card was found on this PC.'}
           </b>
         </div>        <div className="hint left exp-info">
-          {state.clips.length + state.overlayClips.length} clip{state.clips.length + state.overlayClips.length === 1 ? '' : 's'} · {range ? `the part from ${clock(range[0])} to ${clock(range[1])}, ` : ''}length {fmtDur(duration)} · about {sizeText} at {rw}×{rh}. Muted tracks are not included.
+          {state.clips.length + state.overlayClips.length} clip{state.clips.length + state.overlayClips.length === 1 ? '' : 's'} · {range ? `${range.length > 1 ? 'the parts' : 'the part'} ${range.length > 1 ? piecesText(range) : 'from ' + piecesText(range)}, ` : ''}length {fmtDur(duration)} · about {sizeText} at {rw}×{rh}. Muted tracks are not included.
           {s.audioMode === 'separate' && ' Each audio track becomes its own audio stream in the file (switch between them in a player like VLC).'}
         </div>
         {phase === 'error' && <div className="exp-error">Export failed:<pre>{err}</pre></div>}
