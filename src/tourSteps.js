@@ -5,12 +5,17 @@
 export const VIDEO_STEPS = [
   {
     title: 'Welcome to the video editor',
-    text: 'A one-minute tour of the main things. You can leave it any time, and replay it later with the ? button at the top.',
+    text: 'A short tour of how the editor is laid out. You can leave it any time, and replay it later with the ? button at the top (or Help > Tutorial).',
+  },
+  {
+    target: '.menubar',
+    title: 'Everything is in the menus',
+    text: 'File, Edit, Clip, Add, Play, Timeline, View and Help hold every feature, each with its keyboard shortcut next to it. If you cannot find something, look here. Help > Keyboard shortcuts lets you change the keys.',
   },
   {
     target: '.bin .btn-row',
     title: 'Bring in your files',
-    text: 'Import videos, images and music here, or just drop files onto the window. Double-click one to put it on the timeline.',
+    text: 'Import videos, images and music here, or just drop files onto the window. Double-click one to put it on the timeline. The small trim button on a file lets you mark the part you want first.',
   },
   {
     target: '.library',
@@ -20,27 +25,38 @@ export const VIDEO_STEPS = [
   {
     target: '.preview-area',
     title: 'Preview',
-    text: 'Your video plays here. Hold Ctrl and use the mouse wheel to zoom into the picture, which helps when you draw masks. The quality menu next to the zoom makes playback lighter on a slow PC.',
+    text: 'Your video plays here. Hold Ctrl and use the mouse wheel to zoom into the picture. The quality menu next to the zoom makes playback lighter on a slow PC.',
+  },
+  {
+    target: '.transport',
+    title: 'The play bar',
+    text: 'In the middle: play, and step one frame at a time. On the left: mark the In and Out of a part (keys I and O). On the right: play just that part, lift it out (leaves a gap) or extract it (closes the gap). J, K and L play backwards, stop and play forwards.',
   },
   {
     target: '.tl-scroll',
     title: 'Timeline',
-    text: 'Drag clips to move them and drag their edges to trim. Drag a clip sideways to leave a gap. Add more tracks to stack videos on top of each other. Drag the thin bar above the timeline to make it taller.',
+    text: 'Drag clips to move them and drag their edges to trim. Right-click a clip to split, copy, group, nest or colour it. Drag the thin bar above the timeline to make it taller, and the bottom edge of a track name to make that track taller.',
+  },
+  {
+    target: '.tl-toolbar .tool-group',
+    title: 'Trim tools',
+    text: 'Select and move is the normal tool. Ripple, roll, slip and slide are the trim tools editors use to fine-tune cuts. Hover one to see what it does.',
   },
   {
     target: '.tl-toolbar',
-    title: 'Timeline tools',
-    text: 'Split a clip at the playhead (select only its sound and just the sound is cut), freeze a frame, group clips, add markers, and record a voice-over. Hover a button to see what it does.',
-  },
-  {
-    target: '.tl-toolbar button[title^="Add text"]',
-    title: 'Text and titles',
-    text: 'Adds a text clip at the playhead. Pick a style and a font in the inspector on the right.',
+    title: 'Timeline toolbar',
+    text: 'The things you use all the time: undo, split and delete, then text, captions, voice-over and markers. On the right: snapping, closing gaps, tracks, track heights and zoom.',
   },
   {
     target: '.tl-toolbar button[title^="Captions"]',
     title: 'Captions',
     text: 'Turns the words in your video into text clips, timed to the speech, and can save a subtitles file. Then Edit by text lets you cut the video by deleting words, filler words (um, uh) and long pauses. It needs a one-time model download, and works offline after that.',
+  },
+  {
+    target: '.meter-col',
+    side: 'left',
+    title: 'Sound meters',
+    text: 'How loud your video is while it plays. Loud parts are best around -6 dB. If the red light at the top comes on, it got too loud.',
   },
   {
     // select = the tour picks a clip so there is something to show; tab = it opens that tab of the inspector
@@ -56,7 +72,7 @@ export const VIDEO_STEPS = [
     tab: 'clip',
     target: ['.insp-tabs button[data-tab="clip"]', '.inspector'],
     title: 'Clip: position, size and speed',
-    text: 'Move, resize and rotate the picture, animate it with keyframes, and bend it with Funny warp. Speed and reverse are here too. A dot next to a section means something is changed in it.',
+    text: 'Move, resize and rotate the picture, animate it with keyframes, and bend it with Funny warp. Speed, reverse and Stabilise (for shaky clips) are here too. A dot next to a section means something is changed in it.',
   },
   {
     select: 'first',
@@ -64,7 +80,7 @@ export const VIDEO_STEPS = [
     tab: 'look',
     target: ['.insp-tabs button[data-tab="look"]', '.inspector'],
     title: 'Look: effects, colour and masks',
-    text: 'Blur, glow, green screen and colour correction. Masks show only part of a clip: Smart select finds a person or object with a click, and a mask can follow the video with AI (needs a graphics card and a one-time model download) or with Quick tracking (follows the movement, needs nothing).',
+    text: 'Blur, glow, green screen, colour correction and LUT colour looks. Masks show only part of a clip: Smart select finds a person or object with a click, and a mask can follow the video.',
   },
   {
     select: 'first',
@@ -80,7 +96,7 @@ export const VIDEO_STEPS = [
     tab: 'transition',
     target: ['.insp-tabs button[data-tab="transition"]', '.inspector'],
     title: 'Transition: coming in from the previous clip',
-    text: 'Pick how a clip comes in from the one before it. This tab shows for a clip that has another clip in front of it. You can add your own transitions too.',
+    text: 'Pick how a clip comes in from the one before it. This tab shows for a clip that has another clip in front of it. Your own transitions go in the transitions folder (button at the bottom of this tab).',
   },
   {
     target: '.aspect-select',
@@ -88,25 +104,29 @@ export const VIDEO_STEPS = [
     text: 'Choose landscape, vertical for phones, square and more.',
   },
   {
-    target: '.topbar button[title^="Version"]',
-    title: 'History',
-    text: 'Earlier copies of your project are kept, so you can go back if something goes wrong.',
+    target: '.menu-name[data-menu="File"]',
+    title: 'Saving and history',
+    text: 'Save, Save as and Version history are in the File menu. Earlier copies of your project are kept, so you can go back if something goes wrong.',
   },
   {
     target: '.topbar .primary',
     title: 'Export',
-    text: 'When you are happy, export your video as MP4. You can pick quality, a graphics card for speed, or audio only.',
+    text: 'When you are happy, export your video. You can pick quality, a graphics card for speed, or audio only, and export everything, the part between In and Out, or just the selected clips.',
   },
   {
     title: 'That is the tour',
-    text: 'Have fun. Hovering over almost any button shows what it does. Press the ? button at the top to see this again.',
+    text: 'Have fun. Hovering over almost any button shows what it does, and the menus list everything with its shortcut. Press the ? button at the top to see this again.',
   },
 ]
-
 export const IMAGE_STEPS = [
   {
     title: 'Welcome to the picture editor',
-    text: 'Edit pictures and paint: layers, brushes with pen pressure, selections, text, masks and effects. A short tour of the main things; leave it any time and replay it with the ? button at the top.',
+    text: 'Edit pictures and paint: layers, brushes with pen pressure, selections, text, masks and effects. A short tour of the main things; leave it any time and replay it with the ? button at the top (or Help > Tutorial).',
+  },
+  {
+    target: '.menubar',
+    title: 'Everything is in the menus',
+    text: 'File, Edit, Layer, Select, Tools, View and Help hold every feature, each with its key next to it. If you cannot find something, look here.',
   },
   {
     target: '.toolbar-v',

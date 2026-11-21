@@ -54,6 +54,8 @@ The connection only works on this PC, and any MCP app that can start a local pro
 
 The first time you open the video editor or the picture editor, a short tour shows you the key features, one step at a time. You can skip it, and replay it any time with the **?** button at the top.
 
+Every feature is also listed in the menus at the top (File, Edit, Clip, Add, Play, Timeline, View and Help in the video editor), each with its keyboard shortcut, and right-clicking a clip on the timeline shows what you can do with it.
+
 <img src="docs/screenshots/tutorial-video.png" alt="The tutorial in the video editor, explaining Transform and Funny warp" width="48%"> <img src="docs/screenshots/tutorial-image.png" alt="The tutorial in the image editor, explaining Transform and Funny warp" width="48%">
 
 </div>

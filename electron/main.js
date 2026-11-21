@@ -585,7 +585,12 @@ let mainWindow = null
 let dirty = false
 
 function createWindow() {
+  // Developer tests run quietly: the window opens behind everything, off the screen, without taking the keyboard
+  // and without a taskbar button, so whatever the person is doing (a game, say) stays in front and keeps focus.
+  // VIBE_SHOW=1 shows it normally (to watch a test).
+  const quiet = !!process.env.VIBE_SELFTEST && !process.env.VIBE_SHOW
   const win = (mainWindow = new BrowserWindow({
+    ...(quiet ? { show: false, x: -20000, y: -20000, skipTaskbar: true, focusable: false } : {}),
     width: 1400,
     height: 900,
     minWidth: 1000,
@@ -604,6 +609,23 @@ function createWindow() {
       webSecurity: false,
     },
   }))
+  if (quiet) {
+    win.setPosition(-20000, -20000)
+    win.showInactive() // drawn (so screenshots work) but never brought forward
+  }
+  if (process.env.VIBE_SELFTEST) {
+    // tests turn the display beat off (see the switches below), which lets pages draw thousands of frames a second:
+    // hold them to about 60 so a test never takes power away from a game or anything else running
+    win.webContents.on('dom-ready', () =>
+      win.webContents
+        .executeJavaScript(
+          `(() => { const raf = window.requestAnimationFrame.bind(window), caf = window.cancelAnimationFrame.bind(window), wait = new Map(); let last = 0, n = 0
+          window.requestAnimationFrame = (cb) => { const id = ++n; wait.set(id, setTimeout(() => wait.set(id, -raf((ts) => { wait.delete(id); last = performance.now(); cb(ts) })), Math.max(0, last + 16.6 - performance.now()))); return id }
+          window.cancelAnimationFrame = (id) => { const w = wait.get(id); if (w == null) return; w < 0 ? caf(-w) : clearTimeout(w); wait.delete(id) } })()`
+        )
+        .catch(() => {})
+    )
+  }
   win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   if (process.env.VIBE_DEVTOOLS) win.webContents.openDevTools({ mode: 'detach' })
   if (process.env.VIBE_SELFTEST) runSelfTest(win)
@@ -1345,6 +1367,11 @@ function runSelfTest(win) {
       // a real key press, as Windows would send it (menus and page zoom see it too)
       // (only: 'down' holds it, 'up' lets go)
       if (s.key) for (const type of s.only === 'down' ? ['keyDown', 'char'] : s.only === 'up' ? ['keyUp'] : ['keyDown', 'char', 'keyUp']) win.webContents.sendInputEvent({ type, keyCode: s.key, modifiers: s.mods || [] })
+      // a real mouse move onto the middle of an element (hover: CSS selector)
+      if (s.hover) {
+        const r = await win.webContents.executeJavaScript(`(() => { const b = document.querySelector(${JSON.stringify(s.hover)}).getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2] })()`)
+        for (const f of [0.5, 1]) win.webContents.sendInputEvent({ type: 'mouseMove', x: Math.round(r[0] * f), y: Math.round(r[1] * f) })
+      }
       if (s.js) console.log('JS:', JSON.stringify(await win.webContents.executeJavaScript(s.js)))
       if (s.save) {
         const url = await win.webContents.executeJavaScript(s.dataUrl)

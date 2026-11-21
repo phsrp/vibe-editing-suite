@@ -474,7 +474,7 @@ input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var
 .lyr-btn { padding: 2px 4px; background: transparent; border: none; color: var(--dim); cursor: pointer; display: flex; }
 .lyr-btn.on { color: var(--accent2); }
 .lyr-btn:hover { color: var(--text); }
-.canvas-size { color: var(--dim); font-size: 12px; }
+.canvas-size { color: var(--dim); font-size: 12px; margin-left: 10px; }
 .tab-kind { display: inline-flex; color: var(--dim); }
 .preview-box.checker { background-color: #ccc; background-image: linear-gradient(45deg, #999 25%, transparent 25%, transparent 75%, #999 75%), linear-gradient(45deg, #999 25%, transparent 25%, transparent 75%, #999 75%); background-size: 24px 24px; background-position: 0 0, 12px 12px; }
 .newproj { width: 580px; max-width: 94vw; }
@@ -899,3 +899,48 @@ select:hover:not(:disabled) { border-color: var(--line2); }
 .ts-meter { position: absolute; right: 6px; top: 6px; bottom: 6px; width: 13px; display: flex; gap: 2px; align-items: flex-end; padding: 1px; border-radius: 2px; background: var(--line); }
 .ts-meter i { flex: 1; border-radius: 1px; background: linear-gradient(to top, var(--foam, #9ccfd8) 0 70%, var(--gold, #f6c177) 70% 90%, var(--love) 90%); }
 .ts-io { position: absolute; top: 0; bottom: 0; z-index: 1; pointer-events: none; background: color-mix(in srgb, var(--accent) 22%, transparent); border-left: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+
+/* ---- menus: the menu bar at the top of an editor and the right-click menu on the timeline (Menu.jsx) ---- */
+.menubar { display: inline-flex; align-items: center; gap: 0; margin-right: 4px; padding-right: 6px; border-right: 1px solid var(--line); }
+.menu-root { position: relative; }
+.topbar .menubar .menu-name { padding: 5px 9px; font-weight: 500; color: var(--text); border-radius: 6px; }
+.topbar .menubar .menu-name.on { background: var(--panel2); color: var(--accent); }
+.menu-list { position: absolute; left: 0; top: calc(100% + 4px); z-index: 950; min-width: 230px; padding: 5px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; box-shadow: 0 12px 32px rgba(0, 0, 0, .45); animation: fade-in .1s var(--ease); }
+.menu-list .menu-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 6px; color: var(--text); font-size: 13px; }
+.menu-list .menu-item:hover:not(:disabled) { background: var(--panel2); color: var(--text); }
+.menu-list .menu-item:disabled { color: var(--muted); background: transparent; }
+.menu-label { flex: 1; white-space: nowrap; }
+.menu-keys { color: var(--dim); font-size: 11.5px; white-space: nowrap; padding-left: 18px; }
+.menu-item:disabled .menu-keys { color: var(--muted); opacity: .7; }
+.menu-tick { width: 14px; display: inline-flex; color: var(--accent); }
+.menu-sep { height: 1px; margin: 4px 6px; background: var(--line); }
+.menu-head { padding: 6px 10px 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--dim); }
+
+/* the play bar under the preview: marks | playing | the marked part */
+.transport { gap: 6px; }
+.transport .tr-group { display: inline-flex; align-items: center; gap: 2px; padding: 0 6px; }
+.transport .tr-group + .tr-group { border-left: 1px solid var(--line); }
+.transport .tr-group button:not(.primary) { background: transparent; border-color: transparent; color: var(--dim); padding: 5px 8px; }
+.transport .tr-group button:not(.primary):hover:not(:disabled) { background: var(--panel2); color: var(--text); }
+.transport .tr-group button.on { color: var(--accent); }
+.transport .tr-group .play { margin: 0 4px; }
+
+/* your own transitions (Transition tab) */
+.tr-own { display: flex; gap: 6px; margin-top: 4px; }
+.tr-own button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+
+/* the keyboard shortcuts window: sections and a search box */
+.kb-find { width: 100%; margin: 2px 0 8px; }
+.kb-group + .kb-group { margin-top: 12px; }
+.kb-head { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--accent); padding: 4px 0; border-bottom: 1px solid var(--line2); }
+
+/* the theme preview's stand-in for the menu bar (ThemeEditor.jsx ThemeSample) */
+.ts-menus { display: inline-flex; gap: 1px; padding-right: 5px; margin-right: 2px; border-right: 1px solid var(--line); }
+.ts-menus > span { position: relative; padding: 3px 6px; border-radius: 4px; color: var(--text); font-weight: 500; }
+.ts-menus > span.on { background: var(--panel2); color: var(--accent); }
+.ts-menu { position: absolute; left: 0; top: calc(100% + 3px); z-index: 5; width: 118px; padding: 3px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 6px 16px rgba(0, 0, 0, .35); font-weight: 400; }
+.ts-menu i { display: flex; justify-content: space-between; font-style: normal; color: var(--text); padding: 2px 5px; border-radius: 3px; }
+.ts-menu i:first-child { background: var(--panel2); }
+.ts-menu i.off { color: var(--muted); }
+.ts-menu em { font-style: normal; color: var(--dim); font-size: 9.5px; }
+.ts-menu b { height: 1px; margin: 2px 4px; background: var(--line); }

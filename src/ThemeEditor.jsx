@@ -12,7 +12,20 @@ export function ThemeSample({ theme, kind = 'video' }) {
   return (
     <div className="theme-sample" data-theme={theme.base} style={themeStyle(theme)}>
       <div className="ts-top">
-        <button>New</button>
+        {/* the menu bar, one menu open */}
+        <span className="ts-menus">
+          <span>File</span>
+          <span className="on">Edit
+            <span className="ts-menu">
+              <i>Undo <em>Ctrl+Z</em></i>
+              <i className="off">Redo <em>Ctrl+Y</em></i>
+              <b />
+              <i>Copy <em>Ctrl+C</em></i>
+            </span>
+          </span>
+          <span>{kind === 'video' ? 'Clip' : 'Layer'}</span>
+          <span>View</span>
+        </span>
         <button>Save</button>
         <span className="ts-name">My project</span>
         <span className="ts-spacer" />

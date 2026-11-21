@@ -4,6 +4,7 @@ import ImagePreview from './ImagePreview.jsx'
 import ImageInspector from './ImageInspector.jsx'
 import LayersPanel from './LayersPanel.jsx'
 import Icon from './Icon.jsx'
+import { MenuBar } from './Menu.jsx'
 import { serializeImage, serializeImageFull, restoreImage, convertDrawingProject, isDrawingProject } from './project.js'
 import { exportImage, buildLayers, backgroundOf, makeImageRenderer, freeRenderer, imagesReady } from './imageRender.js'
 import { actionFor } from './keybinds.js'
@@ -33,7 +34,7 @@ let pixelClip = null
 const isMaskMode = (m) => m === 'mask' || m === 'maskdraw' || m === 'maskpoly' || m === 'maskdrawsmart'
 
 // One open image project (a tab). Layers on a canvas: pictures, paint and text, each with transform, mask, effects and colour.
-export default function ImageEditor({ tabId, active, initial, binds, onMeta, onNew, onOpen, onOpenPicture, registerHandle }) {
+export default function ImageEditor({ tabId, active, initial, binds, onMeta, onNew, onOpen, onOpenPicture, registerHandle, onSettings }) {
   const [state, dispatch] = useReducer(reducer, { ...initialState, canvas: (initial && initial.canvas) || { w: 1920, h: 1080, bg: '#ffffff' } })
   const stateRef = useRef(state)
   stateRef.current = state
@@ -439,19 +440,97 @@ export default function ImageEditor({ tabId, active, initial, binds, onMeta, onN
     setTour(false)
   }
 
+  // ---- the menus: every feature in one place, with its key
+  const k = (id) => binds[id] || ''
+  const chosen = state.selection.map((id) => state.overlayClips.find((c) => c.id === id)).filter(Boolean)
+  const one = chosen.length === 1 ? chosen[0] : null
+  const eachChosen = (fn) => () => stateRef.current.selection.forEach(fn)
+  const copyOrCut = (cut) => {
+    const c = selRef.current && copyPixels(stateRef.current, selRef.current)
+    if (!c) return flash('Select an area of a paint layer first (Select, Lasso or Smart select).')
+    pixelClip = c
+    if (cut) deleteSelected(stateRef.current, dispatch, selRef.current)
+    flash(cut ? 'Cut. Paste it with Ctrl+V.' : 'Copied. Paste it with Ctrl+V.')
+  }
+  const menus = [
+    {
+      label: 'File',
+      items: [
+        { label: 'New project…', run: onNew },
+        { label: 'Open project…', keys: k('open'), run: onOpen },
+        { label: 'Open picture…', hint: 'Edit a picture from your computer in a new tab', run: onOpenPicture },
+        { sep: true },
+        { label: 'Save', keys: k('save'), run: () => saveProject(false) },
+        { label: 'Save as…', keys: k('saveAs'), run: () => saveProject(true) },
+        { sep: true },
+        { label: 'Add a picture as a layer…', disabled: busy, run: importPictures },
+        { sep: true },
+        { label: 'Export picture…', disabled: !state.overlayClips.length, run: () => setShowExport(true) },
+      ],
+    },
+    {
+      label: 'Edit',
+      items: [
+        { label: 'Undo', keys: k('undo'), disabled: !state.past.length, run: () => dispatch({ type: 'undo' }) },
+        { label: 'Redo', keys: k('redo'), disabled: !state.future.length, run: () => dispatch({ type: 'redo' }) },
+        { sep: true },
+        { label: 'Cut the selected pixels', keys: 'Ctrl+X', disabled: !sel, run: () => copyOrCut(true) },
+        { label: 'Copy the selected pixels', keys: 'Ctrl+C', disabled: !sel, run: () => copyOrCut(false) },
+        { label: 'Paste as a new layer', keys: 'Ctrl+V', disabled: !pixelClip, hint: 'Pictures copied in other apps paste with Ctrl+V', run: () => pixelClip && addPixelLayer(stateRef.current, dispatch, pixelClip.canvas, pixelClip.x, pixelClip.y, 'Pasted') },
+        { sep: true },
+        onSettings && { label: 'Settings…', run: onSettings },
+      ],
+    },
+    {
+      label: 'Layer',
+      items: [
+        { label: 'New paint layer', run: () => dispatch({ type: 'imgAddRaster', id: uid(), rasterId: uid() }) },
+        { label: 'New text layer', keys: 'T', run: () => dispatch({ type: 'imgAddText' }) },
+        { label: 'Add a picture…', disabled: busy, run: importPictures },
+        { sep: true },
+        { label: 'Duplicate', keys: k('duplicate'), disabled: !chosen.length, run: eachChosen((id) => dispatch({ type: 'imgDuplicate', id })) },
+        { label: 'Delete', keys: k('delete'), disabled: !chosen.length, run: eachChosen((id) => dispatch({ type: 'imgRemove', id })) },
+        { sep: true },
+        { label: 'Bring to the front', disabled: !chosen.length, run: eachChosen((id) => dispatch({ type: 'imgMove', id, to: 'top' })) },
+        { label: 'Move up', disabled: !chosen.length, run: eachChosen((id) => dispatch({ type: 'imgMove', id, to: 'up' })) },
+        { label: 'Move down', disabled: !chosen.length, run: eachChosen((id) => dispatch({ type: 'imgMove', id, to: 'down' })) },
+        { label: 'Send to the back', disabled: !chosen.length, run: eachChosen((id) => dispatch({ type: 'imgMove', id, to: 'bottom' })) },
+        { sep: true },
+        { label: 'Turn into pixels', disabled: !one || !!one.raster, hint: 'So you can paint, smudge and select on a picture or text layer', run: () => layerActions.rasterize(one) },
+        { label: 'Clear the layer', disabled: !one || !one.raster, hint: 'Rubs out every pixel of this paint layer', run: () => layerActions.clear(one) },
+      ],
+    },
+    {
+      label: 'Select',
+      items: [
+        { label: 'Select all', keys: 'Ctrl+A', run: selActions.all },
+        { label: 'Select nothing', keys: 'Esc', disabled: !sel, run: selActions.none },
+        { label: 'Invert the selection', keys: 'Ctrl+Shift+I', disabled: !sel, run: selActions.invert },
+      ],
+    },
+    {
+      label: 'Tools',
+      items: TOOLS.map((t) => ({ label: t.label.split(':')[0].replace(/ \([A-Z]\)$/, ''), keys: t.key, hint: t.label, checked: tool === t.id, run: () => setTool(t.id) })),
+    },
+    {
+      label: 'View',
+      items: [
+        { label: 'Layers panel', checked: layersOpen, run: () => setLayersOpen(!layersOpen) },
+        { label: 'Inspector', checked: inspOpen, run: () => setInspOpen(!inspOpen) },
+      ],
+    },
+    {
+      label: 'Help',
+      items: [{ label: 'Tutorial', hint: 'A short tour of the main features', run: () => setTour(true) }],
+    },
+  ]
+
   return (
     <div className="app" ref={appRef} style={{ display: active ? undefined : 'none' }} onDragOver={(e) => e.preventDefault()} onDrop={onDropFiles}>
       <header className="topbar">
+        <MenuBar menus={menus} />
         <span className="tb-group">
-          <button onClick={onNew} title="Start another project in a new tab">New</button>
-          <button onClick={onOpen} title="Open a project in a new tab">Open…</button>
-          <button onClick={onOpenPicture} title="Open a picture from your computer in a new tab, to edit it">Open picture…</button>
-        </span>
-        <span className="tb-group">
-          <button onClick={() => saveProject(false)} title="Save (Ctrl+S)">Save</button>
-          <button onClick={() => saveProject(true)}>Save as…</button>
-        </span>
-        <span className="tb-group">
+          <button onClick={() => saveProject(false)} title={'Save (' + k('save') + ')'}>Save</button>
           <button onClick={() => dispatch({ type: 'undo' })} disabled={!state.past.length} title="Undo (Ctrl+Z)"><Icon name="undo" size={14} /></button>
           <button onClick={() => dispatch({ type: 'redo' })} disabled={!state.future.length} title="Redo (Ctrl+Y)"><Icon name="redo" size={14} /></button>
         </span>

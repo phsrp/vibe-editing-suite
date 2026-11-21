@@ -109,13 +109,16 @@ async function allowed(tool, args) {
   if (tool.name === 'delete_clips') names = await askPage('describe_clips', args).then((r) => r.text).catch(() => '')
   const win = getWindow()
   if (!win || win.isDestroyed()) return false
-  if (win.isMinimized()) win.restore()
-  win.show()
-  win.moveTop()
-  win.focus()
-  if (!win.isFocused()) {
-    win.flashFrame(true)
-    win.once('focus', () => win.flashFrame(false))
+  // bring the editor forward so the person sees the question (tests never do: they run behind everything)
+  if (!process.env.VIBE_SELFTEST) {
+    if (win.isMinimized()) win.restore()
+    win.show()
+    win.moveTop()
+    win.focus()
+    if (!win.isFocused()) {
+      win.flashFrame(true)
+      win.once('focus', () => win.flashFrame(false))
+    }
   }
   const id = nextCall++
   return new Promise((resolve) => {

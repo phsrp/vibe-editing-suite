@@ -1,13 +1,7 @@
-- In and Out marks: press I and O (or the buttons under the preview) to mark a part, then play it (Ctrl+Shift+Space), lift it (;), extract it (') or export just that part
-- Mark the part of a file to use before adding it: the new trim button on a file in the Media panel opens a viewer with In and Out
-- J, K and L: play backwards and forwards, faster each press; hold K and tap J or L to step one frame
-- Trim tools like Premiere: ripple (B), roll (Shift+B), slip (Y) and slide (U), next to the timeline buttons; V goes back to normal
-- Sound level meters next to the timeline, with a red light when the sound gets too loud
-- Nesting: turn selected clips into one clip (Alt+N); double-click it to change what is inside, then Update the nest
-- LUTs: colour looks from .cube files, plus six built-in looks, in Effects and in the Colour tab
-- Stabilise: steady a shaky clip (Clip tab), made in the background
-- Taller or shorter tracks: drag the bottom edge of a track's name, the new Track height button, Alt + mouse wheel, or Ctrl+= / Ctrl+- and Alt+= / Alt+-
-- Cleaner waveforms
-- Export the selected clips straight from the timeline (Ctrl+E); clips that are apart are joined one after the other
-- Fixed: cutting time out of the video now also shortens an empty gap inside that time
-- AI connection: all of the above (11 new tools)
+- Menus at the top of both editors: every feature in one place, with its keyboard shortcut next to it
+- Right-click a clip on the timeline for split, copy, duplicate, group, nest, colour and export; right-click the time ruler for In and Out marks
+- A tidier timeline toolbar: only the things you use all the time (the rest is in the menus)
+- The play bar under the preview is grouped: In and Out marks, play with one-frame steps, and Lift and Extract for the marked part
+- Keyboard shortcuts window in sections, with a search box
+- Your own transitions: the folder buttons are now in the Transition tab
+- The tutorial is updated for the new layout

@@ -1,8 +1,9 @@
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { makeNest, updateNest } from './nest.js'
 import Meter from './Meter.jsx'
+import { MenuBar, ContextMenu } from './Menu.jsx'
 import SourceDialog from './SourceDialog.jsx'
-import { reducer, initialState, layout, projectDuration, fmtTime, toUrl, copySelection, srcAt, ASPECTS, uid, markRange, sourceRange } from './state.js'
+import { reducer, initialState, layout, projectDuration, fmtTime, toUrl, copySelection, srcAt, ASPECTS, uid, markRange, sourceRange, canGroup, canUngroup, hasClipboard, soleVideoClip } from './state.js'
 import Preview from './Preview.jsx'
 import Timeline from './Timeline.jsx'
 import KeybindDialog from './KeybindDialog.jsx'
@@ -20,7 +21,7 @@ import { VIDEO_STEPS } from './tourSteps.js'
 
 // One open project. Several of these can exist at once (one per tab); only the active one is shown
 // and reacts to the keyboard, the others keep their state and wait.
-export default function Editor({ tabId, active, initial, binds, setBinds, onMeta, onNew, onOpen, onExport, onOpenColour, onOpenJson, registerHandle, outerHandle }) {
+export default function Editor({ tabId, active, initial, binds, setBinds, onMeta, onNew, onOpen, onExport, onOpenColour, onOpenJson, registerHandle, outerHandle, onSettings }) {
   const [state, dispatch] = useReducer(reducer, initialState)
   const stateRef = useRef(state)
   stateRef.current = state
@@ -60,6 +61,9 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
     } catch {}
   }
   const fitRef = useRef(null) // set by the timeline: zooms to fit the whole project
+  const tlApi = useRef(null) // set by the timeline: {fit, addTrack, trackHeights} for the menus
+  const [ctx, setCtx] = useState(null) // the right-click menu on the timeline: {x, y, id, onRuler}
+  const closeCtx = useCallback(() => setCtx(null), [])
   const [snapOn, setSnapOnState] = useState(() => {
     try {
       return localStorage.getItem('vibe.snap') !== '0'
@@ -628,17 +632,162 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
     setTour(false)
   }
 
+  // ---- the menus: every feature in one place, with its shortcut (the toolbars keep only the things used all the time)
+  const k = (id) => binds[id] || ''
+  const hasSel = state.selection.length > 0
+  const ioBoth = state.mark.in != null && state.mark.out != null
+  const soleId = soleVideoClip(state)
+  const soleClip = soleId && [...state.clips, ...state.overlayClips].find((c) => c.id === soleId)
+  const soleMedia = soleClip && state.media.find((m) => m.id === soleClip.mediaId)
+  const isNestTab = !!nestOf && !projectPath
+  const act = {
+    split: { label: 'Split at the playhead', keys: k('split'), run: () => dispatch({ type: 'split', t: stateRef.current.playhead }) },
+    freeze: { label: 'Freeze frame', keys: k('freeze'), hint: 'Saves the frame under the playhead as a picture and puts it in', run: freezeFrame },
+    del: { label: 'Delete', keys: k('delete'), disabled: !hasSel, run: () => dispatch({ type: 'deleteSelection', keepGap: !rippleOn }) },
+    copy: { label: 'Copy', keys: k('copy'), disabled: !hasSel, run: doCopy },
+    paste: { label: 'Paste at the playhead', keys: k('paste'), disabled: !hasClipboard(), run: () => dispatch({ type: 'paste', t: stateRef.current.playhead }) },
+    duplicate: { label: 'Duplicate', keys: k('duplicate'), disabled: !hasSel, run: () => dispatch({ type: 'duplicate' }) },
+    group: { label: 'Group', keys: k('group'), disabled: !canGroup(state), hint: 'Selected clips move together. Detached audio in the selection goes back to its video.', run: () => dispatch({ type: 'group' }) },
+    ungroup: { label: 'Ungroup / detach audio', keys: k('ungroup'), disabled: !canUngroup(state), hint: 'Breaks a group, or lets the audio of a video clip be moved on its own', run: () => dispatch({ type: 'ungroup' }) },
+    nest: { label: 'Nest (make them one clip)', keys: k('nest'), disabled: !hasSel, run: doNest },
+    openNest: soleMedia && soleMedia.nest ? { label: 'Open the nest', run: () => openNest(soleMedia.id) } : null,
+    colour: { label: 'Colour…', disabled: !(soleClip && soleMedia && soleMedia.type !== 'audio'), hint: 'Opens the Colour tab for this clip', run: () => onOpenColour(soleId) },
+    exportSel: { label: 'Export the selected clips…', keys: k('exportSel'), disabled: !hasSel, run: () => onExport('selected') },
+    text: { label: 'Text or title', keys: k('text'), run: () => dispatch({ type: 'addText', t: stateRef.current.playhead }) },
+    marker: { label: 'Marker', keys: k('marker'), run: () => dispatch({ type: 'addMarker', t: stateRef.current.playhead }) },
+    addTrack: { label: 'Track…', run: () => tlApi.current && tlApi.current.addTrack() },
+    markIn: { label: 'Mark In', keys: k('markIn'), run: () => dispatch({ type: 'setMark', which: 'in', t: stateRef.current.playhead }) },
+    markOut: { label: 'Mark Out', keys: k('markOut'), run: () => dispatch({ type: 'setMark', which: 'out', t: stateRef.current.playhead }) },
+    clearMarks: { label: 'Clear In and Out', keys: k('clearMarks'), disabled: state.mark.in == null && state.mark.out == null, run: () => dispatch({ type: 'clearMarks' }) },
+    lift: { label: 'Lift (leave the space)', keys: k('lift'), disabled: !ioBoth, hint: 'Removes everything between In and Out and leaves the space empty', run: () => cutMarked(false) },
+    extract: { label: 'Extract (close the space)', keys: k('extract'), disabled: !ioBoth, hint: 'Removes everything between In and Out and closes the space', run: () => cutMarked(true) },
+    fit: { label: 'Zoom to fit', keys: k('fit'), run: () => fitRef.current && fitRef.current() },
+  }
+  const tools = [
+    ['select', 'Select and move', 'toolSelect'],
+    ['ripple', 'Ripple trim', 'toolRipple'],
+    ['roll', 'Roll', 'toolRoll'],
+    ['slip', 'Slip', 'toolSlip'],
+    ['slide', 'Slide', 'toolSlide'],
+  ]
+  const menus = [
+    {
+      label: 'File',
+      items: [
+        { label: 'New project…', run: onNew },
+        { label: 'Open project…', keys: k('open'), run: onOpen },
+        { sep: true },
+        { label: isNestTab ? 'Update the nest' : 'Save', keys: k('save'), run: () => saveProject(false) },
+        { label: 'Save as…', keys: k('saveAs'), run: () => saveProject(true) },
+        { label: 'Version history…', hint: 'Earlier copies of this project', run: () => setShowHistory(true) },
+        { sep: true },
+        { label: 'Import video or picture…', disabled: busy, run: () => importFiles('video') },
+        { label: 'Import audio…', disabled: busy, run: () => importFiles('audio') },
+        { sep: true },
+        { label: 'Export video…', disabled: !state.clips.length && !state.overlayClips.length, run: () => onExport() },
+        act.exportSel,
+      ],
+    },
+    {
+      label: 'Edit',
+      items: [
+        { label: 'Undo', keys: k('undo'), disabled: !state.past.length, run: () => dispatch({ type: 'undo' }) },
+        { label: 'Redo', keys: k('redo'), disabled: !state.future.length, run: () => dispatch({ type: 'redo' }) },
+        { sep: true },
+        act.copy,
+        act.paste,
+        act.duplicate,
+        act.del,
+        { sep: true },
+        { label: 'Keyboard shortcuts…', run: () => setShowKeys(true) },
+        onSettings && { label: 'Settings…', run: onSettings },
+      ],
+    },
+    {
+      label: 'Clip',
+      items: [act.split, act.freeze, { sep: true }, act.group, act.ungroup, act.nest, act.openNest, { sep: true }, act.colour, { sep: true }, act.exportSel],
+    },
+    {
+      label: 'Add',
+      items: [
+        act.text,
+        { label: 'Captions from speech…', hint: 'The words in your video become text clips', run: () => setShowCaptions(true) },
+        { label: 'Edit by text…', hint: 'Cut the video by deleting words (makes the captions first if needed)', run: () => setShowTranscript(true) },
+        { label: rec ? 'Stop the voice-over' : 'Voice-over', keys: k('record'), run: startRecording },
+        act.marker,
+        { sep: true },
+        act.addTrack,
+      ],
+    },
+    {
+      label: 'Play',
+      items: [
+        { label: state.playing ? 'Pause' : 'Play', keys: k('playPause'), run: () => dispatch({ type: 'setPlaying', value: !stateRef.current.playing }) },
+        { label: 'Play backwards', keys: k('shuttleBack'), hint: 'Press again to go faster', run: () => dispatch({ type: 'shuttle', dir: -1 }) },
+        { label: 'Play forwards', keys: k('shuttleForward'), hint: 'Press again to go faster', run: () => dispatch({ type: 'shuttle', dir: 1 }) },
+        { label: 'Step back one frame', keys: k('stepBack'), run: () => stepFrame(-1) },
+        { label: 'Step forward one frame', keys: k('stepForward'), run: () => stepFrame(1) },
+        { label: 'Go to start', keys: k('goStart'), run: () => dispatch({ type: 'setPlayhead', t: 0, user: true }) },
+        { sep: true },
+        act.markIn,
+        act.markOut,
+        { label: 'Go to In', keys: k('goIn'), disabled: state.mark.in == null, run: () => dispatch({ type: 'setPlayhead', t: stateRef.current.mark.in, user: true }) },
+        { label: 'Go to Out', keys: k('goOut'), disabled: state.mark.out == null, run: () => dispatch({ type: 'setPlayhead', t: stateRef.current.mark.out, user: true }) },
+        { label: 'Play from In to Out', keys: k('playInOut'), disabled: !markRange(state), run: playInOut },
+        act.clearMarks,
+      ],
+    },
+    {
+      label: 'Timeline',
+      items: [
+        ...tools.map(([id, label, key]) => ({ label: label + ' tool', keys: k(key), checked: tool === id, run: () => setTool(id) })),
+        { sep: true },
+        { label: 'Snapping', keys: k('snap'), checked: snapOn, run: () => setSnapOn(!snapOn) },
+        { label: 'Close gaps after deleting', keys: k('ripple'), checked: rippleOn, run: () => setRippleOn(!rippleOn) },
+        { sep: true },
+        act.lift,
+        act.extract,
+      ],
+    },
+    {
+      label: 'View',
+      items: [
+        { label: 'Media panel', checked: binOpen, run: () => setBinOpen(!binOpen) },
+        { label: 'Library', checked: libOpen, run: () => setLibOpen(!libOpen) },
+        { label: 'Inspector', checked: inspOpen, run: () => setInspOpen(!inspOpen) },
+        { label: 'Mini timeline', checked: miniOn, hint: 'An overview of the whole project under the timeline', run: () => setMiniOn(!miniOn) },
+        { sep: true },
+        act.fit,
+        { label: 'Track heights…', run: () => tlApi.current && tlApi.current.trackHeights() },
+        { label: 'Taller video tracks', keys: k('videoTaller'), run: () => dispatch({ type: 'growRows', kind: 'video', by: 12 }) },
+        { label: 'Shorter video tracks', keys: k('videoShorter'), run: () => dispatch({ type: 'growRows', kind: 'video', by: -12 }) },
+        { label: 'Taller sound tracks', keys: k('audioTaller'), run: () => dispatch({ type: 'growRows', kind: 'audio', by: 12 }) },
+        { label: 'Shorter sound tracks', keys: k('audioShorter'), run: () => dispatch({ type: 'growRows', kind: 'audio', by: -12 }) },
+      ],
+    },
+    {
+      label: 'Help',
+      items: [
+        { label: 'Tutorial', hint: 'A short tour of the main features', run: () => setTour(true) },
+        { label: 'Keyboard shortcuts…', run: () => setShowKeys(true) },
+      ],
+    },
+  ]
+  // the right-click menu: for the clips that are chosen, a gap, the ruler, or an empty part of the timeline
+  const ctxItems = (c) => {
+    if (!c) return []
+    if (c.id && c.id.startsWith('gap:')) return [{ label: 'Close this gap', run: () => dispatch({ type: 'closeGap', id: c.id.slice(4) }) }]
+    if (c.onRuler) return [act.markIn, act.markOut, act.clearMarks, { sep: true }, act.lift, act.extract, { sep: true }, { ...act.marker, label: 'Add a marker' }, act.fit]
+    if (c.id) return [act.split, act.del, { sep: true }, act.copy, act.duplicate, act.paste, { sep: true }, act.group, act.ungroup, act.nest, act.openNest, { sep: true }, act.colour, act.freeze, { sep: true }, act.exportSel]
+    return [act.paste, { sep: true }, { ...act.text, label: 'Add text' }, { ...act.marker, label: 'Add a marker' }, { ...act.addTrack, label: 'Add a track…' }, { sep: true }, act.fit]
+  }
+
   return (
     <div className="app" ref={appRef} style={{ display: active ? undefined : 'none' }} onDragOver={(e) => e.preventDefault()} onDrop={onDropFiles}>
       <header className="topbar">
+        <MenuBar menus={menus} />
         <span className="tb-group">
-          <button onClick={onNew} title="Start another project in a new tab">New</button>
-          <button onClick={onOpen} title="Open a project in a new tab">Open…</button>
-        </span>
-        <span className="tb-group">
-          <button onClick={() => saveProject(false)} title="Save (Ctrl+S)">Save</button>
-          <button onClick={() => saveProject(true)}>Save as…</button>
-          <button onClick={() => setShowHistory(true)} title="Version history: earlier copies of this project"><Icon name="history" size={14} /></button>
+          <button onClick={() => saveProject(false)} title={(isNestTab ? 'Update the nest' : 'Save') + ' (' + k('save') + ')'}>Save</button>
         </span>
         <span className="proj-name">{nestOf && !projectPath ? (nestOf.name || 'Nest') + ' (inside)' : projectName}{dirty ? ' •' : ''}</span>
         {nestOf && !projectPath && (
@@ -724,14 +873,25 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
 
         <main className="stage">
           <Preview state={state} dispatch={dispatch} transitions={transitions} onCompiled={setTrErrors} active={active} mode={mode} setMode={setMode} freeMode={freeMode} />
+          {/* the play bar: In / Out marks on the left, playing in the middle, what to do with the marked part on the right */}
           <div className="transport">
-            <button onClick={() => dispatch({ type: 'setPlayhead', t: 0, user: true })} title="Go to start"><Icon name="skipBack" fill /></button>
-            <button className={state.mark.in != null ? 'on' : ''} onClick={() => dispatch({ type: 'setMark', which: 'in', t: state.playhead })} onContextMenu={(e) => { e.preventDefault(); dispatch({ type: 'setMark', which: 'in', t: null }) }} title={'Mark In at the playhead (' + binds.markIn + '). Right-click removes it.'}><Icon name="markIn" /></button>
-            <button className={state.mark.out != null ? 'on' : ''} onClick={() => dispatch({ type: 'setMark', which: 'out', t: state.playhead })} onContextMenu={(e) => { e.preventDefault(); dispatch({ type: 'setMark', which: 'out', t: null }) }} title={'Mark Out at the playhead (' + binds.markOut + '). Right-click removes it.'}><Icon name="markOut" /></button>
-            <button className="primary play" onClick={() => dispatch({ type: 'setPlaying', value: !state.playing })}>
-              {state.playing ? <><Icon name="pause" fill /> Pause</> : <><Icon name="play" fill /> Play</>}
-            </button>
-            <button disabled={!markRange(state)} onClick={playInOut} title={'Play from the In mark to the Out mark (' + binds.playInOut + ')'}><Icon name="playInOut" /></button>
+            <span className="tr-group">
+              <button className={state.mark.in != null ? 'on' : ''} onClick={() => dispatch({ type: 'setMark', which: 'in', t: state.playhead })} onContextMenu={(e) => { e.preventDefault(); dispatch({ type: 'setMark', which: 'in', t: null }) }} title={'Mark In at the playhead (' + binds.markIn + '). Right-click removes it.'}><Icon name="markIn" /></button>
+              <button className={state.mark.out != null ? 'on' : ''} onClick={() => dispatch({ type: 'setMark', which: 'out', t: state.playhead })} onContextMenu={(e) => { e.preventDefault(); dispatch({ type: 'setMark', which: 'out', t: null }) }} title={'Mark Out at the playhead (' + binds.markOut + '). Right-click removes it.'}><Icon name="markOut" /></button>
+            </span>
+            <span className="tr-group">
+              <button onClick={() => dispatch({ type: 'setPlayhead', t: 0, user: true })} title={'Go to start (' + binds.goStart + ')'}><Icon name="skipBack" fill /></button>
+              <button onClick={() => stepFrame(-1)} title={'One frame back (' + binds.stepBack + ')'}><Icon name="frameBack" /></button>
+              <button className="primary play" onClick={() => dispatch({ type: 'setPlaying', value: !state.playing })} title={'Play or pause (' + binds.playPause + '). J, K and L play backwards, stop and play forwards.'}>
+                {state.playing ? <><Icon name="pause" fill /> Pause</> : <><Icon name="play" fill /> Play</>}
+              </button>
+              <button onClick={() => stepFrame(1)} title={'One frame forward (' + binds.stepForward + ')'}><Icon name="frameFwd" /></button>
+            </span>
+            <span className="tr-group">
+              <button disabled={!markRange(state)} onClick={playInOut} title={'Play from the In mark to the Out mark (' + binds.playInOut + ')'}><Icon name="playInOut" /></button>
+              <button disabled={!ioBoth} onClick={() => cutMarked(false)} title={'Lift: remove everything between the In and Out marks and leave the space empty (' + binds.lift + ')'}><Icon name="lift" /></button>
+              <button disabled={!ioBoth} onClick={() => cutMarked(true)} title={'Extract: remove everything between the In and Out marks and close the space (' + binds.extract + ')'}><Icon name="extract" /></button>
+            </span>
             <span className="timecode">
               {fmtTime(state.playhead)} / {fmtTime(total)}
             </span>
@@ -762,41 +922,30 @@ export default function Editor({ tabId, active, initial, binds, setBinds, onMeta
       <Timeline
         onCaptions={() => setShowCaptions(true)}
         height={tlHeight}
-        onLift={() => cutMarked(false)}
-        onNest={doNest}
-        nestKey={binds.nest}
         onOpenNest={openNest}
         tool={tool}
         setTool={setTool}
         toolKeys={binds}
-        onExtract={() => cutMarked(true)}
-        liftKeys={[binds.lift, binds.extract]}
         state={state}
         dispatch={dispatch}
         zoom={zoom}
         setZoom={setZoom}
         splitKey={binds.split}
-        onExportSel={() => onExport('selected')}
-        exportSelKey={binds.exportSel}
         heightKeys={[binds.videoTaller, binds.videoShorter, binds.audioTaller, binds.audioShorter]}
-        freezeKey={binds.freeze}
-        groupKey={binds.group}
-        ungroupKey={binds.ungroup}
-        onFreeze={freezeFrame}
         snapOn={snapOn}
         setSnapOn={setSnapOn}
         rippleOn={rippleOn}
         setRippleOn={setRippleOn}
-        onCopy={doCopy}
         fitRef={fitRef}
+        tlApi={tlApi}
+        onMenu={(x, y, info) => setCtx({ x, y, ...info })}
         rec={rec}
         onRecord={startRecording}
         miniOn={miniOn}
-        setMiniOn={setMiniOn}
-        onKeybinds={() => setShowKeys(true)}
       />
       <Meter playing={state.playing} />
       </div>
+      {ctx && <ContextMenu x={ctx.x} y={ctx.y} items={ctxItems(ctx)} onClose={closeCtx} />}
       {showSource && <SourceDialog media={state.media.find((m) => m.id === showSource) || null} onClose={() => setShowSource(null)} onSave={(mark) => dispatch({ type: 'setSourceMark', id: showSource, mark })} onAdd={(mark) => { dispatch({ type: 'setSourceMark', id: showSource, mark }); const m = state.media.find((x) => x.id === showSource); setShowSource(null); if (m) setTimeout(() => addMediaToTimeline(m), 0) }} />}
       {showHistory && <HistoryDialog projectKey={historyKey()} onClose={() => setShowHistory(false)} onRestore={restoreJson} onOpenNew={(json) => {
         setShowHistory(false)

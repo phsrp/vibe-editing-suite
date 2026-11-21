@@ -419,6 +419,7 @@ export default function App() {
               onOpen={openDialog}
               onOpenPicture={openPictureDialog}
               registerHandle={registerHandle}
+              onSettings={() => setShowSettings(true)}
             />
           ) : (
             <Editor
@@ -436,6 +437,7 @@ export default function App() {
               onOpenJson={(json, nestOf) => newTab({ file: null, json, nestOf: nestOf ? { ...nestOf, tabId: t.id } : null })}
               outerHandle={t.initial && t.initial.nestOf ? () => handles.current[t.initial.nestOf.tabId] : null}
               registerHandle={registerHandle}
+              onSettings={() => setShowSettings(true)}
             />
           ),
         )}

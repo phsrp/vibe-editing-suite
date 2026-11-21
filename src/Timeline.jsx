@@ -5,7 +5,7 @@ import Wave from './Wave.jsx'
 import VolumeEdit from './VolumeEdit.jsx'
 import MiniMap from './MiniMap.jsx'
 import { maskSpan } from './masks.js'
-import { srcAt, tlOf, speedOf, lenOf, layout, audioLayout, overlayLayout, streamCount, projectDuration, rowKeys, audioSource, fmtTime, fmtDur, toUrl, uid, hasAttached, canGroup, canUngroup, hasClipboard, streamAudioOf, envAt, fadeAt, rowHeight, rowKind, ROW_MIN, ROW_MAX, markRange, trimEdit } from './state.js'
+import { srcAt, tlOf, speedOf, lenOf, layout, audioLayout, overlayLayout, streamCount, projectDuration, rowKeys, audioSource, fmtTime, fmtDur, toUrl, uid, hasAttached, streamAudioOf, envAt, fadeAt, rowHeight, rowKind, ROW_MIN, ROW_MAX, markRange, trimEdit } from './state.js'
 import { labelColor } from './labels.js'
 
 const TRACK_PAD = 12
@@ -70,7 +70,7 @@ function RowLabel({ name, sub, mute, onMute, onRemove, onRename, onGrip, locked,
     </div>
   )
 }
-export default function Timeline({ onCaptions, height, state, dispatch, zoom, setZoom, splitKey, freezeKey, groupKey, ungroupKey, onFreeze, onKeybinds, snapOn, setSnapOn, rippleOn, setRippleOn, onCopy, fitRef, miniOn, setMiniOn, rec, onRecord, onExportSel, exportSelKey, heightKeys = [], onLift, onExtract, liftKeys = [], onNest, nestKey, onOpenNest, tool = 'select', setTool = () => {}, toolKeys = {} }) {
+export default function Timeline({ onCaptions, height, state, dispatch, zoom, setZoom, splitKey, snapOn, setSnapOn, rippleOn, setRippleOn, fitRef, tlApi, onMenu, miniOn, rec, onRecord, heightKeys = [], onOpenNest, tool = 'select', setTool = () => {}, toolKeys = {} }) {
   const scrollRef = useRef(null)
   const innerRef = useRef(null)
   const trackRef = useRef(null) // the ruler lane: reference for time <-> pixel conversion
@@ -291,7 +291,19 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
     el.scrollLeft = 0
   }
   if (fitRef) fitRef.current = fit
+  // what the editor's menus can ask the timeline to do
+  if (tlApi) tlApi.current = { fit, addTrack: () => setShowAdd(true), trackHeights: () => setHeightOpen(true) }
   const localX = (clientX) => clientX - trackRef.current.getBoundingClientRect().left - TRACK_PAD
+  // right-click: the clip under the mouse is chosen (unless it is already part of what is chosen), then the editor shows its menu
+  const onContext = (e) => {
+    if (!onMenu || e.target.closest('.tl-label, input, textarea')) return
+    e.preventDefault()
+    const gapEl = e.target.closest('[data-gap]')
+    const el = e.target.closest('[data-sel]')
+    const id = gapEl ? 'gap:' + gapEl.dataset.gap : el ? el.dataset.sel : null
+    if (id && !state.selection.includes(id)) dispatch({ type: 'select', id })
+    onMenu(e.clientX, e.clientY, { id, onRuler: !!e.target.closest('.ruler-row') })
+  }
 
   // Pointer-drag helper with edge auto-scroll. onMove(clientX, clientY) is called on every move and
   // every frame while the pointer sits near the edge of the timeline (so content keeps scrolling).
@@ -855,10 +867,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
     indicatorX = indicatorIdx >= others.length ? (lastO ? (lastO.start + lastO.dur) * zoom : 0) : others[indicatorIdx].start * zoom
   }
 
-  const groupOk = canGroup(state)
   const ioRange = markRange(state)
-  const ioBoth = state.mark.in != null && state.mark.out != null
-  const ungroupOk = canUngroup(state)
 
   const streamName = (n) => `Video audio ${n + 1}`
   const streamSub = (n) => {
@@ -899,6 +908,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
             .map((c) => (
               <div
                 key={'gap' + c.id}
+                data-gap={c.id}
                 className={'gap-block' + (sel.has('gap:' + c.id) ? ' selected' : '')}
                 style={{ left: (c.start - c.gap) * zoom, width: Math.max(4, c.gap * zoom) }}
                 onPointerDown={(e) => {
@@ -1155,21 +1165,7 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
         </span>
         <span className="tb-group">
           <button onClick={() => dispatch({ type: 'split', t: state.playhead })} title={'Split at the playhead' + (splitKey ? ' (' + splitKey + ')' : '')}><Icon name="scissors" /></button>
-          <button onClick={onFreeze} title={'Freeze: save the frame under the playhead as an image and insert it' + (freezeKey ? ' (' + freezeKey + ')' : '')}><Icon name="snowflake" /></button>
           <button disabled={!state.selection.length} onClick={() => dispatch({ type: 'deleteSelection', keepGap: !rippleOn })} title="Delete selected (Del)"><Icon name="trash" /></button>
-          <button disabled={!ioBoth} onClick={onLift} title={'Lift: remove everything between the In and Out marks and leave the space empty' + (liftKeys[0] ? ' (' + liftKeys[0] + ')' : '')}><Icon name="lift" /></button>
-          <button disabled={!ioBoth} onClick={onExtract} title={'Extract: remove everything between the In and Out marks and close the space' + (liftKeys[1] ? ' (' + liftKeys[1] + ')' : '')}><Icon name="extract" /></button>
-        </span>
-        <span className="tb-group">
-          <button disabled={!state.selection.length} onClick={onCopy} title="Copy the selected clips (Ctrl+C)"><Icon name="copy" size={14} /></button>
-          <button disabled={!hasClipboard()} onClick={() => dispatch({ type: 'paste', t: state.playhead })} title="Paste at the playhead (Ctrl+V). A new track is made if no track has room there."><Icon name="paste" size={14} /></button>
-          <button disabled={!state.selection.length} onClick={() => dispatch({ type: 'duplicate' })} title="Duplicate the selected clips (Ctrl+D)"><Icon name="duplicate" size={14} /></button>
-          <button disabled={!state.selection.length} onClick={onExportSel} title={'Export only the selected clips: the Export tab opens with them chosen. Clips that are apart are joined one after the other.' + (exportSelKey ? ' (' + exportSelKey + ')' : '')}><Icon name="upload" size={14} /></button>
-        </span>
-        <span className="tb-group">
-          <button disabled={!groupOk} onClick={() => dispatch({ type: 'group' })} title="Group the selected clips so they move together. Detached audio in the selection is attached back to its video."><Icon name="link" /></button>
-          <button disabled={!state.selection.length} onClick={onNest} title={'Nest: make the selected clips one clip that you can move, cut and add effects to as one. Double-click a nest to change what is inside.' + (nestKey ? ' (' + nestKey + ')' : '')}><Icon name="nest" /></button>
-          <button disabled={!ungroupOk} onClick={() => dispatch({ type: 'ungroup' })} title="Ungroup the selected group. With no group selected: detach the selected audio (or all the audio of a selected video clip) so it can be moved, trimmed or deleted on its own."><Icon name="unlink" /></button>
         </span>
         <span className="tb-group">
           <button onClick={() => dispatch({ type: 'addText', t: state.playhead })} title="Add text or a title at the playhead (T)"><Icon name="type" size={14} /> Text</button>
@@ -1184,7 +1180,6 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
         <span className="tb-group">
           <button className={(snapOn ? 'on' : '') + (snapLine != null ? ' snapped' : '')} onClick={() => setSnapOn(!snapOn)} title={'Snapping is ' + (snapOn ? 'on' : 'off') + ': dragged clips stick to clip edges, markers and the playhead, and a line shows where (N)'}><Icon name="magnet" size={14} /></button>
           <button className={rippleOn ? 'on' : ''} onClick={() => setRippleOn(!rippleOn)} title={'Close gaps is ' + (rippleOn ? 'on: when you delete a clip, the clips after it slide back to fill the space' : 'off: when you delete a clip, the clips after it stay where they are and a gap is left') + ' (G)'}><Icon name="ripple" size={14} /></button>
-          <button className={miniOn ? 'on' : ''} onClick={() => setMiniOn(!miniOn)} title="Show or hide the mini timeline (an overview of the whole project under the timeline)"><Icon name="map" size={14} /></button>
         </span>
         <span className="tb-group">
           <button onClick={() => setShowAdd(true)} title="Add an overlay video track or an audio track"><Icon name="plus" size={14} /> Track</button>
@@ -1207,12 +1202,11 @@ export default function Timeline({ onCaptions, height, state, dispatch, zoom, se
           <label className="zoom" title="Zoom the timeline in and out">
             <input type="range" min="0" max="100" value={Math.round((100 * Math.log(Math.max(zoom, 0.2) / 0.2)) / Math.log(2000))} onChange={(e) => setZoom(0.2 * Math.pow(2000, +e.target.value / 100))} />
           </label>
-          <button onClick={onKeybinds} title="Keyboard shortcuts"><Icon name="keyboard" /></button>
         </span>
       </div>
 
       <div className="tl-scroll" ref={scrollRef} onWheel={onWheel}>
-        <div className="tl-inner" ref={innerRef} style={{ width }} onPointerDown={startMarquee}>
+        <div className="tl-inner" ref={innerRef} style={{ width }} onPointerDown={startMarquee} onContextMenu={onContext}>
           {/* ruler: stays pinned to the top while you scroll through the tracks */}
           <div className="tl-row ruler-row" style={{ height: 26 }}>
             <div className="tl-label ruler-label" style={{ width: LABEL }} />

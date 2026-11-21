@@ -757,7 +757,7 @@ export default function Inspector({ state, dispatch, transitions, errors, onRelo
         {state.selection.length === 0 && (
           <div className="empty-box plain"><Icon name="sliders" size={26} /><span>Select a clip on the timeline to edit it. Drag a box around clips to select several.</span></div>
         )}
-        {state.selection.length > 1 && !clip && !allAudio && <div className="hint">{state.selection.length} items selected. Use the timeline toolbar to Group, Ungroup or Delete them.</div>}
+        {state.selection.length > 1 && !clip && !allAudio && <div className="hint">{state.selection.length} items selected. Right-click them (or use the Clip menu) to group, nest, copy or delete them.</div>}
         {!clip && (state.selection.length === 1 || allAudio) && <AudioPanel state={state} dispatch={dispatch} />}
         {clip && (
           <>
@@ -862,14 +862,16 @@ export default function Inspector({ state, dispatch, transitions, errors, onRelo
                 )}
               </>
             )}
+            {/* your own transitions: .glsl files dropped into the transitions folder */}
+            <div className="insp-sub">Your own transitions</div>
+            <div className="btn-row tr-own">
+              <button className="mini" onClick={onOpenFolder} title="Drop new .glsl transition files in here"><Icon name="folder" size={13} /> Transitions folder</button>
+              <button className="mini" onClick={onReload} title="Read the folder again after adding or changing a file"><Icon name="refresh" size={13} /> Reload</button>
+            </div>
             </Section>
             )}
           </>
         )}
-      </div>
-      <div className="insp-foot">
-        <button onClick={onOpenFolder} title="Drop new .glsl transition files in here"><Icon name="folder" /> Transitions folder</button>
-        <button onClick={onReload}><Icon name="refresh" /> Reload</button>
       </div>
     </aside>
   )
